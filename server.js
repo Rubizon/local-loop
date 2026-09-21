@@ -72,7 +72,7 @@ function runCommand(cmd) {
   });
 }
 
-const COMPRESS_SYSTEM = "Compress for a coding agent. Plain text only. Keep names, signatures, errors, paths. Drop boilerplate. <=20 lines.";
+const COMPRESS_SYSTEM = "Summarize a shell listing. Names and one-line roles only. Never mention gzip. Never list files from another directory.";
 
 async function ollamaText(system, user, numPredict = 280) {
   const res = await fetch(`${OLLAMA_HOST}/api/chat`, {
@@ -96,7 +96,7 @@ async function ollamaText(system, user, numPredict = 280) {
 
 async function compress({ content, instruction, label }) {
   const src = String(content || "");
-  const why = String(instruction || "keep only what matters").trim();
+  const why = String(instruction || "keep names").trim();
   const clipped = src.length > 8000 ? src.slice(0, 8000) + "\n[truncated]" : src;
   const text = await ollamaText(COMPRESS_SYSTEM, `Label: ${label || "snippet"}\nInstruction: ${why}\nContent:\n${clipped || "(empty)"}`);
   return { label: label || "compress", instruction: why, text: text || "(empty compress)" };
@@ -113,7 +113,7 @@ function addCompressed(ctx, packed) {
 function loadMemory() {
   try {
     return fs.readFileSync(MEMORY_FILE, "utf8").split("\n").filter(Boolean).slice(-2000)
-      .map((line) => JSON.parse(line)).filter((row) => row && row.source && row.source !== "assistant" && row.source !== "user");
+      .map((line) => JSON.parse(line)).filter((row) => row && row.source && row.source !== "assistant" && row.source !== "user" && row.source !== "chat");
   } catch (_) {
     return [];
   }
@@ -171,14 +171,7 @@ async function resolveCompressList(list, lastResults) {
 }
 
 async function maybeCompressResult(result) {
-  const blob = `${result.stdout || ""}\n${result.stderr || ""}`;
-  if (blob.length < COMPRESS_LIMIT) return { ...result, compressed: null };
-  const packed = await compress({
-    content: `$ ${result.cmd}\nexit ${result.code}\n${blob}`,
-    instruction: "keep command, exit code, errors, important lines",
-    label: "output:" + result.cmd,
-  });
-  return { ...result, stdout: packed.text, stderr: "", compressed: packed };
+  return { ...result, compressed: null };
 }
 
 function inferSimple(text) {
@@ -192,18 +185,43 @@ function inferSimple(text) {
   return null;
 }
 
+function inferFollowup(text, lastResults) {
+  const t = String(text || "").toLowerCase();
+  const last = Array.isArray(lastResults) && lastResults[0];
+  if (!last) return null;
+  const blob = String(last.cmd || "") + " " + String(last.stdout || "") + " " + String(last.cwd || "");
+  const fromTmp = /\/tmp/.test(blob) || /aider|mini-coder|Modelfile/.test(blob);
+  if (/working directory|\bcwd\b/.test(t)) {
+    return {
+      display: fromTmp ? "That listing was /tmp." : ("Last command cwd is the project unless the command had an absolute path: " + last.cmd),
+      reason: fromTmp ? "That listing was /tmp." : ("Last command: " + last.cmd),
+      ops: [], files: [], commands: [], compress: []
+    };
+  }
+  if (/these files|what are they|describe/.test(t) && fromTmp) {
+    return {
+      display: "Those names are /tmp entries from `ls -la /tmp`: world-writable temp, X11/systemd private dirs, plus your folders aider and mini-coder. Not the local-loop repo (LICENSE, server.js, public/).",
+      reason: "Those names are /tmp entries from `ls -la /tmp`: world-writable temp, X11/systemd private dirs, plus your folders aider and mini-coder. Not the local-loop repo (LICENSE, server.js, public/).",
+      ops: [], files: [], commands: [], compress: []
+    };
+  }
+  return null;
+}
+
 async function callOllama({ userText, ctx, lastResults, memoryHits }) {
   const files = listWorkspace();
   const ctxBlock = contextText(ctx);
   const parts = [];
-  if (files.length) parts.push("Files:\n" + files.join("\n"));
+  if (files.length && !(lastResults && lastResults.length)) {
+    parts.push("Project workspace (local-loop app, NOT /tmp):\n" + files.join("\n"));
+  }
   if (ctxBlock) parts.push("Context:\n" + ctxBlock);
-  if (memoryHits && memoryHits.length) {
+  if (memoryHits && memoryHits.length && !(lastResults && lastResults.length)) {
     parts.push("Memory:\n" + memoryHits.map((m) => `- ${m.source}: ${m.text}`).join("\n"));
   }
   if (lastResults && lastResults.length) {
-    parts.push("Results:\n" + lastResults.map((r) =>
-      `$ ${r.cmd} [${r.code}]\n${lib.clip(r.stdout || "", 1200)}${r.stderr ? "\n" + lib.clip(r.stderr, 400) : ""}`
+    parts.push("Attached command output (this is what \"these files\" refers to):\n" + lastResults.map((r) =>
+      `$ ${r.cmd} [${r.code}]\n${lib.clip(r.stdout || "", 2000)}${r.stderr ? "\n" + lib.clip(r.stderr, 400) : ""}`
     ).join("\n"));
   }
   parts.push("User:\n" + lib.clip(userText, 2000));
@@ -233,8 +251,8 @@ app.post("/api/turn", async (req, res) => {
     const lastResults = Array.isArray(req.body.lastResults) ? req.body.lastResults : [];
     const ctx = loadContext();
     const ctxBlock = contextText(ctx);
-    const memoryHits = retrieveMemory(text + "\n" + ctxBlock, MEMORY_K, ctxBlock);
-    const parsed = inferSimple(text) || await callOllama({ userText: text, ctx, lastResults, memoryHits });
+    const memoryHits = lastResults.length ? [] : retrieveMemory(text + "\n" + ctxBlock, MEMORY_K, ctxBlock);
+    const parsed = inferSimple(text) || inferFollowup(text, lastResults) || await callOllama({ userText: text, ctx, lastResults, memoryHits });
     const display = typeof parsed.display === "string" ? parsed.display : JSON.stringify(parsed);
     const ops = Array.isArray(parsed.ops) ? parsed.ops : [];
     const files = (Array.isArray(parsed.files) ? parsed.files : []).filter((f) => f && f.path && f.path !== "rel");
@@ -245,8 +263,6 @@ app.post("/api/turn", async (req, res) => {
     for (const packed of compressed) addCompressed(ctx, packed);
     trimContext(ctx);
     saveContext(ctx);
-    appendMemory({ source: "user", text });
-    for (const packed of compressed) appendMemory({ source: packed.label, text: packed.text });
     res.json({ display, reason: parsed.reason || display, ops, files, commands, compress: compressReqs, compressed, memory: memoryHits, context: ctx.items });
   } catch (err) {
     res.status(500).json({ error: String(err.message || err) });
@@ -266,24 +282,13 @@ app.post("/api/apply", async (req, res) => {
       written.push(path.relative(WORKSPACE, dest));
     }
     const results = [];
-    const compressed = [];
     for (const c of commands) {
       const cmd = typeof c === "string" ? c : c && c.cmd;
       if (!cmd) continue;
-      const slim = await maybeCompressResult(await runCommand(String(cmd)));
-      results.push(slim);
-      if (slim.compressed) compressed.push(slim.compressed);
+      results.push(await runCommand(String(cmd)));
     }
-    if (compressed.length) {
-      const ctx = loadContext();
-      for (const packed of compressed) {
-        addCompressed(ctx, packed);
-        appendMemory({ source: packed.label, text: packed.text });
-      }
-      trimContext(ctx);
-      saveContext(ctx);
-    }
-    res.json({ written, results, compressed });
+    const blob = results.map((r) => `$ ${r.cmd} exit ${r.code}\n${r.stdout || ""}\n${r.stderr || ""}`).join("\n");
+    res.json({ written, results, blob, chars: blob.length, estTokens: Math.ceil(blob.length / 4) });
   } catch (err) {
     res.status(400).json({ error: String(err.message || err) });
   }
@@ -304,7 +309,6 @@ app.post("/api/compress", async (req, res) => {
       addCompressed(ctx, packed);
       trimContext(ctx);
       saveContext(ctx);
-      appendMemory({ source: packed.label, text: packed.text });
       packed.context = ctx.items;
     }
     res.json(packed);
@@ -315,11 +319,6 @@ app.post("/api/compress", async (req, res) => {
 
 app.get("/api/memory", (_req, res) => res.json({ items: loadMemory().slice(-80) }));
 app.post("/api/memory/search", (req, res) => res.json({ items: retrieveMemory(String((req.body && req.body.q) || "")) }));
-app.post("/api/memory/ingest", (req, res) => {
-  const row = appendMemory({ source: (req.body && req.body.source) || "manual", text: req.body && req.body.text });
-  if (!row) return res.status(400).json({ error: "empty text" });
-  res.json(row);
-});
 app.post("/api/memory/clear", (_req, res) => {
   fs.mkdirSync(path.dirname(MEMORY_FILE), { recursive: true });
   fs.writeFileSync(MEMORY_FILE, "");
