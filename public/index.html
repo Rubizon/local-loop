@@ -5,40 +5,51 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>local-loop</title>
   <style>
-    :root { color-scheme: dark; --bg:#111; --panel:#1b1b1b; --line:#333; --fg:#eee; --muted:#9aa; --acc:#8fd19e; }
+    :root { color-scheme: dark; --bg:#0e0e10; --panel:#1a1a1f; --line:#2c2c34; --fg:#eee; --muted:#8b8b97; --acc:#7dcea0; --user:#2a3344; --err:#5c2a2a; }
     * { box-sizing: border-box; }
-    body { margin:0; font:14px/1.4 system-ui,sans-serif; background:var(--bg); color:var(--fg); }
-    header { padding:12px 16px; border-bottom:1px solid var(--line); display:flex; gap:16px; flex-wrap:wrap; }
-    header span { color:var(--muted); }
-    main { display:grid; grid-template-columns: 1fr 280px; min-height: calc(100vh - 48px); }
-    #chat { padding:16px; overflow:auto; }
-    .msg { margin:0 0 12px; padding:10px 12px; background:var(--panel); border:1px solid var(--line); border-radius:8px; white-space:pre-wrap; }
-    .msg.user { border-color:#445; }
-    .pending { border-color:#665; }
-    .pending button { margin-right:8px; margin-top:8px; }
-    aside { border-left:1px solid var(--line); padding:16px; background:#151515; }
-    aside h2 { margin:0 0 8px; font-size:13px; color:var(--muted); font-weight:600; }
-    #ctx li { margin:0 0 8px; }
-    footer { position:sticky; bottom:0; padding:12px 16px; background:var(--bg); border-top:1px solid var(--line); }
-    textarea { width:100%; min-height:72px; background:#0d0d0d; color:var(--fg); border:1px solid var(--line); border-radius:8px; padding:8px; }
-    button { background:#2a2a2a; color:var(--fg); border:1px solid var(--line); border-radius:6px; padding:6px 10px; cursor:pointer; }
-    button.ok { background:#244; border-color:#385; color:var(--acc); }
-    @media (max-width: 800px) { main { grid-template-columns: 1fr; } aside { border-left:none; border-top:1px solid var(--line); } }
+    html, body { height: 100%; margin: 0; }
+    body { font: 14px/1.45 system-ui, sans-serif; background: var(--bg); color: var(--fg); display: flex; flex-direction: column; }
+    header { padding: 10px 16px; border-bottom: 1px solid var(--line); display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+    header span { color: var(--muted); font-size: 12px; }
+    #status { color: #c9a227; font-size: 12px; }
+    main { flex: 1; display: grid; grid-template-columns: 1fr 280px; min-height: 0; }
+    #thread { display: flex; flex-direction: column; min-height: 0; }
+    #chat { flex: 1; overflow: auto; padding: 16px; }
+    .msg { margin: 0 0 10px; padding: 10px 12px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; white-space: pre-wrap; }
+    .msg.user { background: var(--user); }
+    .msg.err { background: var(--err); }
+    .msg .who { font-size: 11px; color: var(--muted); margin-bottom: 4px; }
+    .pending { border-color: #665; }
+    .actions { margin-top: 8px; font-family: ui-monospace, monospace; font-size: 12px; background: #111; padding: 8px; border-radius: 6px; }
+    .rowbtns { margin-top: 8px; display: flex; gap: 8px; flex-wrap: wrap; }
+    aside { border-left: 1px solid var(--line); padding: 16px; background: #141418; overflow: auto; }
+    aside h2 { margin: 0 0 8px; font-size: 12px; color: var(--muted); }
+    #ctx { margin: 0; padding-left: 18px; }
+    footer { padding: 12px 16px; border-top: 1px solid var(--line); background: #121214; }
+    textarea { width: 100%; min-height: 64px; background: #0d0d0f; color: var(--fg); border: 1px solid var(--line); border-radius: 8px; padding: 8px; }
+    button { background: #2a2a32; color: var(--fg); border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px; cursor: pointer; }
+    button:disabled { opacity: .5; cursor: not-allowed; }
+    button.ok { background: #1e3a2f; border-color: #385; color: var(--acc); }
+    .hint { color: var(--muted); font-size: 12px; margin: 6px 0 0; }
+    @media (max-width: 800px) { main { grid-template-columns: 1fr; } aside { border-left: none; border-top: 1px solid var(--line); max-height: 160px; } }
   </style>
 </head>
 <body>
   <header>
     <strong>local-loop</strong>
     <span id="meta"></span>
-    <button id="clear">clear context</button>
-    <button id="test">Test</button>
+    <span id="status"></span>
+    <span style="flex:1"></span>
+    <button type="button" id="clear">clear context</button>
+    <button type="button" id="test">Test</button>
   </header>
   <main>
-    <div>
+    <div id="thread">
       <div id="chat"></div>
       <footer>
-        <textarea id="input" placeholder="Ask to create a file, run a command, or remember something…"></textarea>
-        <p><button class="ok" id="send">send</button></p>
+        <textarea id="input" placeholder="e.g. list files in the workspace"></textarea>
+        <p class="hint">Enter to send · Shift+Enter for newline · approve before run</p>
+        <p><button class="ok" type="button" id="send">send</button></p>
       </footer>
     </div>
     <aside>
@@ -51,18 +62,33 @@
     const ctxEl = document.getElementById("ctx");
     const input = document.getElementById("input");
     const meta = document.getElementById("meta");
+    const status = document.getElementById("status");
+    const sendBtn = document.getElementById("send");
     let lastResults = [];
+    let busy = false;
+    function setBusy(on, label) {
+      busy = on;
+      sendBtn.disabled = on;
+      status.textContent = on ? (label || "waiting on model...") : "";
+    }
     function addMsg(role, text) {
       const div = document.createElement("div");
       div.className = "msg " + role;
-      div.textContent = text;
+      const who = document.createElement("div");
+      who.className = "who";
+      who.textContent = role === "user" ? "you" : role === "err" ? "error" : "model";
+      const body = document.createElement("div");
+      body.className = "body";
+      body.textContent = text;
+      div.appendChild(who);
+      div.appendChild(body);
       chat.appendChild(div);
       chat.scrollTop = chat.scrollHeight;
-      return div;
+      return { div: div, body: body };
     }
     function renderContext(items) {
       ctxEl.innerHTML = "";
-      (items || []).forEach((it) => {
+      (items || []).forEach(function (it) {
         const li = document.createElement("li");
         li.textContent = it.id + ". " + it.text;
         ctxEl.appendChild(li);
@@ -71,120 +97,136 @@
     async function refresh() {
       const r = await fetch("/api/state");
       const s = await r.json();
-      meta.textContent = s.model + " · " + s.workspace;
+      meta.textContent = s.model + " \u00b7 " + s.workspace;
       renderContext(s.context);
     }
     async function apply(files, commands, box) {
       const r = await fetch("/api/apply", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ files, commands }),
+        body: JSON.stringify({ files: files, commands: commands })
       });
       const data = await r.json();
       if (!r.ok) throw new Error(data.error || "apply failed");
       lastResults = data.results || [];
       const lines = [];
       if (data.written && data.written.length) lines.push("wrote: " + data.written.join(", "));
-      for (const res of lastResults) {
+      lastResults.forEach(function (res) {
         lines.push("$ " + res.cmd + "  (exit " + res.code + ")");
         if (res.stdout) lines.push(res.stdout);
         if (res.stderr) lines.push(res.stderr);
-      }
-      box.textContent += "\n\n" + (lines.join("\n") || "done");
+      });
+      const out = document.createElement("div");
+      out.className = "actions";
+      out.textContent = lines.join("\n") || "done";
+      box.appendChild(out);
       await refresh();
       const again = document.createElement("button");
+      again.type = "button";
       again.textContent = "send output to model";
-      box.appendChild(document.createElement("br"));
       box.appendChild(again);
-      again.onclick = () => {
-        const bits = (lastResults || []).map((r) =>
-          "$ " + r.cmd + " exit " + r.code + "\n" + (r.stdout || "") + "\n" + (r.stderr || "")
-        );
-        input.value = "Use these command results:\n" + bits.join("\n");
+      again.onclick = function () {
+        input.value = "Use these command results:\n" + lastResults.map(function (res) {
+          return "$ " + res.cmd + " exit " + res.code + "\n" + (res.stdout || "") + "\n" + (res.stderr || "");
+        }).join("\n");
         turn();
       };
     }
-    let busy = false;
     async function turn() {
       const text = input.value.trim();
       if (!text || busy) return;
-      busy = true;
       input.value = "";
       addMsg("user", text);
-      const pending = addMsg("bot", "…");
+      const pending = addMsg("bot", "...");
+      setBusy(true);
+      const ac = new AbortController();
+      const timer = setTimeout(function () { ac.abort(); }, 120000);
       try {
         const r = await fetch("/api/turn", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ text, lastResults }),
+          body: JSON.stringify({ text: text, lastResults: lastResults }),
+          signal: ac.signal
         });
-        const data = await r.json();
-        if (!r.ok) throw new Error(data.error || "turn failed");
+        const data = await r.json().catch(function () { return {}; });
+        if (!r.ok) throw new Error(data.error || ("HTTP " + r.status));
         lastResults = [];
-        pending.textContent = data.display || "(no display)";
+        pending.body.textContent = (data.display && String(data.display).trim()) || "(model returned no display text)";
         if (data.memory && data.memory.length) {
-          pending.textContent += "\n\nmemory:\n" + data.memory.map((m) => m.source + ": " + m.text).join("\n");
-        }
-        if (data.compressed && data.compressed.length) {
-          pending.textContent += "\n\ncompressed:\n" + data.compressed.map((c) => c.label + " → " + c.text).join("\n");
+          pending.body.textContent += "\n\nmemory:\n" + data.memory.map(function (m) { return m.source + ": " + m.text; }).join("\n");
         }
         renderContext(data.context);
         const files = data.files || [];
         const commands = data.commands || [];
-        if (!files.length && !commands.length) return;
-        pending.classList.add("pending");
+        if (!files.length && !commands.length) {
+          pending.body.textContent += "\n\n(no command proposed. Try: propose an ls command for this workspace)";
+          return;
+        }
+        pending.div.classList.add("pending");
         const pre = document.createElement("pre");
-        pre.textContent = JSON.stringify({ files, commands }, null, 2);
-        pending.appendChild(pre);
+        pre.className = "actions";
+        pre.textContent = JSON.stringify({ files: files, commands: commands }, null, 2);
+        pending.div.appendChild(pre);
+        const row = document.createElement("div");
+        row.className = "rowbtns";
         const yes = document.createElement("button");
+        yes.type = "button";
         yes.className = "ok";
         yes.textContent = "run / write";
         const no = document.createElement("button");
+        no.type = "button";
         no.textContent = "skip";
-        pending.appendChild(yes);
-        pending.appendChild(no);
-        yes.onclick = async () => {
+        row.appendChild(yes);
+        row.appendChild(no);
+        pending.div.appendChild(row);
+        yes.onclick = async function () {
           yes.disabled = no.disabled = true;
-          try { await apply(files, commands, pending); }
-          catch (e) { pending.textContent += "\n" + e.message; }
+          try { await apply(files, commands, pending.div); }
+          catch (e) { addMsg("err", e.message); }
         };
-        no.onclick = () => { yes.disabled = no.disabled = true; pending.textContent += "\n(skipped)"; };
+        no.onclick = function () { yes.disabled = no.disabled = true; pending.body.textContent += "\n(skipped)"; };
       } catch (e) {
-        pending.textContent = e.message;
+        pending.div.className = "msg err";
+        pending.body.textContent = e.name === "AbortError"
+          ? "timed out after 120s (Ollama busy or model not loaded)"
+          : e.message;
       } finally {
-        busy = false;
+        clearTimeout(timer);
+        setBusy(false);
       }
     }
-    document.getElementById("send").onclick = turn;
-    input.addEventListener("keydown", (e) => {
-      if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) turn();
+    sendBtn.onclick = turn;
+    input.addEventListener("keydown", function (e) {
+      if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); turn(); }
     });
-    document.getElementById("test").onclick = async () => {
-      const box = addMsg("bot", "running tests…");
+    document.getElementById("test").onclick = async function () {
+      const box = addMsg("bot", "running tests...");
+      setBusy(true, "tests...");
       try {
         const unit = await (await fetch("/api/selftest")).json();
-        let lines = ["runner " + unit.passed + "/" + unit.total + (unit.ok ? " PASS" : " FAIL")];
-        (unit.results || []).forEach((r) => lines.push((r.ok ? "PASS" : "FAIL") + " " + r.name));
+        var lines = ["runner " + unit.passed + "/" + unit.total + (unit.ok ? " PASS" : " FAIL")];
+        (unit.results || []).forEach(function (r) { lines.push((r.ok ? "PASS" : "FAIL") + " " + r.name); });
         const mr = await fetch("/api/model-test", { method: "POST" });
         const model = await mr.json();
-        if (!mr.ok) {
-          lines.push("model FAIL " + (model.error || mr.status));
-        } else {
+        if (!mr.ok) lines.push("model FAIL " + (model.error || mr.status));
+        else {
           lines.push("model " + model.model + " " + model.passed + "/" + model.total + (model.ok ? " PASS" : " FAIL"));
-          (model.checks || []).forEach((c) => lines.push((c.ok ? "PASS" : "FAIL") + " " + c.name));
+          (model.checks || []).forEach(function (c) { lines.push((c.ok ? "PASS" : "FAIL") + " " + c.name); });
           if (model.display) lines.push("display: " + model.display);
         }
-        box.textContent = lines.join("\n");
+        box.body.textContent = lines.join("\n");
       } catch (e) {
-        box.textContent = e.message;
+        box.body.textContent = e.message;
+      } finally {
+        setBusy(false);
       }
     };
-    document.getElementById("clear").onclick = async () => {
+    document.getElementById("clear").onclick = async function () {
       await fetch("/api/context/clear", { method: "POST" });
       lastResults = [];
       await refresh();
     };
-    refresh();
+    refresh().catch(function (e) { addMsg("err", "cannot reach server: " + e.message); });
   </script>
 </body>
 </html>
