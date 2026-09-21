@@ -4,14 +4,22 @@ const CONTEXT_MAX = Number(process.env.CONTEXT_MAX || 12);
 const DENY_CMD = /(\bsudo\b|\brm\s+-rf\s+\/|\bmkfs\b|\bdd\s+if=|\bchmod\s+-R\s+777|\bchown\s+-R\s+|\bcurl\b[^|&;]*\|\s*(sh|bash)|:\(\)\s*\{)/i;
 
 const SYSTEM = `Local coding helper. Reply with one JSON object only.
-{"display":"short UI text","ops":[{"op":"add|edit|remove","id":1,"text":"..."}],"files":[{"action":"write","path":"rel","content":"..."}],"commands":[{"cmd":"ls"}],"compress":[{"source":"file|output","path":"rel","index":0,"instruction":"what to keep"}]}
-Empty arrays when unused. display required. Paths relative. No sudo. No whole files in display. compress instead of pasting. ops only for durable facts. greet -> display only.`;
+{"display":"1-3 sentences: what you will do and why","ops":[],"files":[],"commands":[{"cmd":"ls /tmp"}],"compress":[]}
+display is reasoning for the human, not a dump of commands. Prefer ONE command for the whole job (use ls /tmp, never cd then ls). Never write a file named rel. files[].path must be a real filename. Empty arrays when unused. No sudo. greet -> display only.`;
+
+const REASON_SYSTEM = `Reason about the user request. JSON only:
+{"reason":"2-4 short sentences","act":"none|command|file"}
+act=none for greetings or questions you can answer without shell/files. Prefer one later command like ls /tmp. No commands in this phase.`;
+
+const ACTION_SYSTEM = `Turn the plan into actions. JSON only:
+{"display":"one line","ops":[],"files":[],"commands":[{"cmd":"ls /tmp"}],"compress":[]}
+Use ONE command when possible (ls /tmp not cd + ls). Never path rel. Empty arrays if the plan said none.`;
 
 const MODEL_PROBE_USER = `Reply with JSON only. Set display to exactly PING-OK. ops/files/commands/compress must be empty arrays. Do not propose any command.`;
 
 function clip(s, n) {
   const t = String(s || "");
-  return t.length <= n ? t : t.slice(0, n) + "…";
+  return t.length <= n ? t : t.slice(0, n) + "\u2026";
 }
 
 function extractJson(text) {
@@ -122,7 +130,7 @@ function runUnitTests() {
   applyOps(ctx, [{ op: "add", text: "goal A" }, { op: "add", text: "goal B" }]);
   applyOps(ctx, [{ op: "edit", id: 1, text: "goal A2" }, { op: "remove", id: 2 }]);
   check("applyOps add/edit/remove", ctx.items.length === 1 && ctx.items[0].text === "goal A2");
-  check("clip", clip("abcdef", 4) === "abcd…");
+  check("clip", clip("abcdef", 4) === "abcd\u2026");
   const toks = tokenize("Hello.py AND hello.py");
   check("tokenize", toks.has("hello.py"));
   check("scoreChunk overlap", scoreChunk(tokenize("hello world"), { text: "hello there" }) > 0);
@@ -143,6 +151,8 @@ module.exports = {
   CONTEXT_MAX,
   DENY_CMD,
   SYSTEM,
+  REASON_SYSTEM,
+  ACTION_SYSTEM,
   MODEL_PROBE_USER,
   clip,
   extractJson,
