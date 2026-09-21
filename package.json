@@ -3,9 +3,9 @@
   "version": "1.0.0",
   "private": true,
   "description": "Local web UI + Node agent loop for Ollama with approve-before-run",
-  "main": "server.js",
+  "main": "extra.js",
   "scripts": {
-    "start": "node server.js",
+    "start": "node extra.js",
     "test": "node selftest.js --unit-only",
     "test:model": "node selftest.js --require-model"
   },
