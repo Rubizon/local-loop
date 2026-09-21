@@ -3,9 +3,11 @@ const path = require("path");
 const CONTEXT_MAX = Number(process.env.CONTEXT_MAX || 12);
 const DENY_CMD = /(\bsudo\b|\brm\s+-rf\s+\/|\bmkfs\b|\bdd\s+if=|\bchmod\s+-R\s+777|\bchown\s+-R\s+|\bcurl\b[^|&;]*\|\s*(sh|bash)|:\(\)\s*\{)/i;
 
-const SYSTEM = `Local coding helper. Reply with one JSON object only.
-{"display":"1-3 sentences: what you will do and why","ops":[],"files":[],"commands":[{"cmd":"ls /tmp"}],"compress":[]}
-display is reasoning for the human, not a dump of commands. Prefer ONE command for the whole job (use ls /tmp, never cd then ls). Never write a file named rel. files[].path must be a real filename. Empty arrays when unused. No sudo. greet -> display only.`;
+const SYSTEM = `Local helper. JSON only:
+{"display":"answer","ops":[],"files":[],"commands":[]}
+Notes tagged [U] user-locked or [A] agent. Maintain notes with ops:
+{"op":"add","text":"..."} {"op":"edit","id":n,"text":"..."} {"op":"remove","id":n}
+Adds become [A]. Prefer ONE command. Empty arrays if unused. No sudo. Use attached output; do not invent other files. If output is long, add a short note instead of repeating it.`;
 
 const REASON_SYSTEM = `Reason about the user request. JSON only:
 {"reason":"2-4 short sentences","act":"none|command|file"}
@@ -19,7 +21,7 @@ const MODEL_PROBE_USER = `Reply with JSON only. Set display to exactly PING-OK. 
 
 function clip(s, n) {
   const t = String(s || "");
-  return t.length <= n ? t : t.slice(0, n) + "\u2026";
+  return t.length <= n ? t : t.slice(0, n) + "…";
 }
 
 function extractJson(text) {
@@ -38,20 +40,31 @@ function extractJson(text) {
   }
 }
 
-function applyOps(ctx, ops) {
-  if (!Array.isArray(ops)) return ctx;
+function applyOps(ctx, ops, opts) {
+  if (!Array.isArray(ops)) return { ctx, pending: [] };
+  const pending = [];
+  const protect = !!(opts && opts.protectUser);
   for (const op of ops) {
     if (!op || typeof op !== "object") continue;
     if (op.op === "add" && typeof op.text === "string" && op.text.trim()) {
-      ctx.items.push({ id: ctx.nextId++, text: op.text.trim() });
+      ctx.items.push({
+        id: ctx.nextId++,
+        text: op.text.trim(),
+        origin: op.origin === "U" ? "U" : "A",
+      });
     } else if (op.op === "edit" && Number.isFinite(Number(op.id)) && typeof op.text === "string") {
       const item = ctx.items.find((i) => i.id === Number(op.id));
-      if (item) item.text = op.text.trim();
+      if (!item) continue;
+      if (protect && item.origin === "U") pending.push({ op: "edit", id: item.id, text: op.text.trim(), origin: "U" });
+      else item.text = op.text.trim();
     } else if (op.op === "remove" && Number.isFinite(Number(op.id))) {
-      ctx.items = ctx.items.filter((i) => i.id !== Number(op.id));
+      const item = ctx.items.find((i) => i.id === Number(op.id));
+      if (!item) continue;
+      if (protect && item.origin === "U") pending.push({ op: "remove", id: item.id, origin: "U" });
+      else ctx.items = ctx.items.filter((i) => i.id !== Number(op.id));
     }
   }
-  return ctx;
+  return { ctx, pending };
 }
 
 function assertSafeCmd(cmd) {
@@ -81,6 +94,51 @@ function scoreChunk(queryTokens, chunk) {
   let overlap = 0;
   for (const t of queryTokens) if (tokens.has(t)) overlap += 1;
   return overlap / Math.sqrt(tokens.size);
+}
+
+function formatAttachment(results, opts) {
+  const max = (opts && opts.max) || 12000;
+  if (!Array.isArray(results) || !results.length) return "";
+  const blob = results
+    .map((r) => {
+      const lines = [
+        "cmd: " + (r.cmd || ""),
+        "cwd: " + (r.cwd || ""),
+        "exit: " + String(r.code),
+        "mode: " + (r.mode || "full"),
+      ];
+      if (r.instruction) lines.push("summary-instruction: " + r.instruction);
+      lines.push("---");
+      lines.push(String(r.stdout || ""));
+      if (r.stderr) lines.push("stderr:\n" + String(r.stderr));
+      return lines.join("\n");
+    })
+    .join("\n\n");
+  if (blob.length <= max) return blob;
+  return blob.slice(0, max) + "\n[truncated — summarize or send less]";
+}
+
+function estimatePrompt({ system, context, attachment, user, numCtx }) {
+  const chars =
+    String(system || "").length +
+    String(context || "").length +
+    String(attachment || "").length +
+    String(user || "").length +
+    160;
+  const tokens = Math.ceil(chars / 4);
+  const ctx = Number(numCtx) || 8192;
+  return {
+    chars,
+    tokens,
+    numCtx: ctx,
+    pct: Math.round((tokens / ctx) * 100),
+    parts: {
+      system: Math.ceil(String(system || "").length / 4),
+      context: Math.ceil(String(context || "").length / 4),
+      attachment: Math.ceil(String(attachment || "").length / 4),
+      user: Math.ceil(String(user || "").length / 4),
+    },
+  };
 }
 
 function scoreModelReply(parsed, rawText) {
@@ -130,7 +188,7 @@ function runUnitTests() {
   applyOps(ctx, [{ op: "add", text: "goal A" }, { op: "add", text: "goal B" }]);
   applyOps(ctx, [{ op: "edit", id: 1, text: "goal A2" }, { op: "remove", id: 2 }]);
   check("applyOps add/edit/remove", ctx.items.length === 1 && ctx.items[0].text === "goal A2");
-  check("clip", clip("abcdef", 4) === "abcd\u2026");
+  check("clip", clip("abcdef", 4) === "abcd…");
   const toks = tokenize("Hello.py AND hello.py");
   check("tokenize", toks.has("hello.py"));
   check("scoreChunk overlap", scoreChunk(tokenize("hello world"), { text: "hello there" }) > 0);
@@ -139,6 +197,12 @@ function runUnitTests() {
   check("model scorer accepts PING-OK", fakeGood.ok);
   const fakeBad = scoreModelReply({ display: "hi", commands: [{ cmd: "sudo rm -rf /" }], _raw: true }, "x".repeat(50));
   check("model scorer rejects sudo", !fakeBad.ok);
+  const att = formatAttachment([
+    { cmd: "ls -la /tmp", cwd: "/tmp", code: 0, stdout: "a.txt", stderr: "", mode: "full" },
+  ]);
+  check("formatAttachment meta", att.includes("cmd: ls -la /tmp") && att.includes("cwd: /tmp") && att.includes("mode: full") && att.includes("a.txt"));
+  const est = estimatePrompt({ system: "x".repeat(40), context: "", attachment: att, user: "hi", numCtx: 8192 });
+  check("estimatePrompt tokens", est.tokens > 0 && est.numCtx === 8192 && est.parts.attachment > 0);
   return {
     ok: results.every((r) => r.ok),
     passed: results.filter((r) => r.ok).length,
@@ -161,6 +225,8 @@ module.exports = {
   safeRelPath,
   tokenize,
   scoreChunk,
+  formatAttachment,
+  estimatePrompt,
   scoreModelReply,
   runUnitTests,
 };

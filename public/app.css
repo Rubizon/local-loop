@@ -171,7 +171,7 @@ button.ok { background: var(--acc-dim); border-color: #385; color: var(--acc); }
   background: #555;
 }
 .attach.on .attach-dot { background: var(--acc); }
-.attach-detail { font-size: 12px; color: var(--muted); margin: 8px 0 0; word-break: break-word; }
+.attach-detail { font-size: 12px; color: var(--muted); margin: 8px 0 0; word-break: break-word; white-space: pre-wrap; }
 @media (max-width: 860px) {
   main { grid-template-columns: 1fr; }
   aside { border-left: none; border-top: 1px solid var(--line); max-height: 220px; }

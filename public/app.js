@@ -11,9 +11,9 @@ const chipModel = document.getElementById("chipModel");
 const chipCwd = document.getElementById("chipCwd");
 
 let lastResults = [];
+let fullResults = [];
 let attachmentNote = "";
 let busy = false;
-let ctxLocked = true;
 let ctxCache = [];
 
 function setText(el, v) {
@@ -44,9 +44,9 @@ function addMsg(role, text) {
   return { div: div, body: body };
 }
 
-function attachmentBlob() {
-  return (lastResults || []).map(function (r) {
-    return "$ " + r.cmd + " exit " + r.code + "\n" + (r.stdout || "") + "\n" + (r.stderr || "");
+function rawBlob(rows) {
+  return (rows || []).map(function (r) {
+    return (r.stdout || "") + (r.stderr ? "\n" + r.stderr : "");
   }).join("\n");
 }
 
@@ -54,14 +54,24 @@ function renderAttach() {
   const on = lastResults.length > 0;
   if (attachEl) attachEl.className = "attach " + (on ? "on" : "off");
   if (!on) {
-    setText(attachText, "No output attached");
+    setText(attachText, "No output attached to next send");
     setText(attachDetail, "None");
     return;
   }
-  const n = attachmentBlob().length;
-  const cmd = lastResults[0] && lastResults[0].cmd;
-  setText(attachText, "Attached \u00b7 " + cmd + " \u00b7 " + n + " chars \u00b7 " + (attachmentNote || "full"));
-  setText(attachDetail, cmd + " (" + n + " chars, " + (attachmentNote || "full") + ")");
+  const r = lastResults[0] || {};
+  const n = rawBlob(lastResults).length;
+  const mode = attachmentNote || r.mode || "full";
+  const warn = n > 2500 ? "  ·  large for 8k — consider Summarize" : "";
+  setText(attachText, "Will attach on Send · " + (r.cmd || "?") + " · " + mode + " · " + n + " chars" + warn);
+  setText(
+    attachDetail,
+    "cmd " + (r.cmd || "?") +
+      "\ncwd " + (r.cwd || "?") +
+      "\nexit " + String(r.code) +
+      "\nmode " + mode +
+      "\n" + n + " chars" +
+      (r.instruction ? "\nkeep: " + r.instruction : "")
+  );
 }
 
 async function updateBudget() {
@@ -74,10 +84,73 @@ async function updateBudget() {
     const s = await r.json();
     const p = s.parts || {};
     if (budgetEl) budgetEl.className = "meter" + (s.pct >= 70 ? " high" : "");
-    setText(budgetEl, "~" + s.tokens + " / " + s.numCtx + " tok  \u00b7  notes " + (p.context || 0)
-      + "  attach " + (p.attachment || 0) + "  you " + (p.user || 0));
+    setText(
+      budgetEl,
+      "~" + s.tokens + " / " + s.numCtx + " tok  (" + s.pct + "%)  ·  notes " + (p.context || 0) +
+        "  attach " + (p.attachment || 0) + "  you " + (p.user || 0)
+    );
   } catch (_) {
     setText(budgetEl, "budget unavailable");
+  }
+}
+
+function useFull() {
+  if (!fullResults.length) return;
+  lastResults = fullResults.map(function (r) {
+    return Object.assign({}, r, { mode: "full", instruction: undefined });
+  });
+  attachmentNote = "full";
+  renderAttach();
+  updateBudget();
+}
+
+async function summarizeAttach(box) {
+  if (!fullResults.length) {
+    addMsg("err", "Nothing to summarize. Approve a command first.");
+    return;
+  }
+  const blob = rawBlob(fullResults);
+  const goal = ((input && input.value) || "").trim() || "keep names that matter for the next question";
+  setBusy(true, "Planning how to summarize…");
+  try {
+    const pr = await fetch("/api/summarize-plan", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ content: blob, goal: goal })
+    });
+    const plan = await pr.json();
+    if (!pr.ok) throw new Error(plan.error || "plan failed");
+    const why = plan.instruction || "keep names";
+    setBusy(true, "Compressing with that plan…");
+    const cr = await fetch("/api/compress", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ content: blob, instruction: why, label: "result", save: false })
+    });
+    const d = await cr.json();
+    if (!cr.ok) throw new Error(d.error || "summarize failed");
+    const src = fullResults[0] || {};
+    lastResults = [{
+      cmd: src.cmd || "summary",
+      cwd: src.cwd || "",
+      code: src.code,
+      stdout: d.text || "",
+      stderr: "",
+      mode: "summary",
+      instruction: why
+    }];
+    attachmentNote = "summary";
+    const host = box || (chat && chat.lastElementChild);
+    if (host) {
+      const prev = document.createElement("div");
+      prev.className = "term";
+      prev.textContent = "Summary plan (what the model will keep):\n" + why + "\n\nCompressed output (inspect, then Send):\n" + (d.text || "");
+      host.appendChild(prev);
+    }
+    renderAttach();
+    updateBudget();
+  } finally {
+    setBusy(false);
   }
 }
 
@@ -85,29 +158,37 @@ function renderContext(items) {
   if (!ctxEl) return;
   if (items) ctxCache = items.slice();
   ctxEl.innerHTML = "";
-  if (!ctxCache.length && ctxLocked) {
+  if (!ctxCache.length) {
     const li = document.createElement("li");
     li.style.color = "#8b8d98";
-    li.textContent = "Empty. Unlock to type a note.";
+    li.textContent = "Empty. Add a note; the model may add [A] notes.";
     ctxEl.appendChild(li);
     return;
   }
-  ctxCache.forEach(function (it, idx) {
+  ctxCache.forEach(function (it) {
     const li = document.createElement("li");
-    if (ctxLocked) {
-      li.textContent = it.text;
-    } else {
-      const ta = document.createElement("textarea");
-      ta.style.minHeight = "52px";
-      ta.value = it.text;
-      ta.oninput = function () { ctxCache[idx].text = ta.value; };
-      const del = document.createElement("button");
-      del.type = "button";
-      del.textContent = "Remove";
-      del.onclick = function () { ctxCache.splice(idx, 1); renderContext(); };
-      li.appendChild(ta);
-      li.appendChild(del);
-    }
+    const badge = document.createElement("span");
+    badge.className = "chip";
+    badge.textContent = it.origin === "U" ? "U" : "A";
+    badge.title = it.origin === "U" ? "User-locked" : "Agent";
+    const span = document.createElement("span");
+    span.textContent = " " + it.text + " ";
+    const del = document.createElement("button");
+    del.type = "button";
+    del.textContent = "Delete";
+    del.onclick = async function () {
+      const r = await fetch("/api/context/delete", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: it.id })
+      });
+      const d = await r.json();
+      renderContext(d.context || []);
+      updateBudget();
+    };
+    li.appendChild(badge);
+    li.appendChild(span);
+    li.appendChild(del);
     ctxEl.appendChild(li);
   });
 }
@@ -119,7 +200,56 @@ async function refresh() {
   setText(chipModel, s.model || "model");
   setText(chipCwd, "cwd " + (s.cwd || s.workspace || ""));
   if (chipCwd) chipCwd.title = s.cwd || s.workspace || "";
-  if (ctxLocked) renderContext(s.context);
+  renderContext(s.context);
+}
+
+function showPendingOps(box, ops) {
+  const wrap = document.createElement("div");
+  wrap.className = "plan";
+  const h = document.createElement("div");
+  h.className = "plan-h";
+  h.textContent = "Model wants to change a user-locked (U) note";
+  wrap.appendChild(h);
+  ops.forEach(function (op) {
+    const line = document.createElement("div");
+    line.className = "plan-row";
+    line.textContent = op.op + " #" + op.id + (op.text ? " → " + op.text : "");
+    wrap.appendChild(line);
+  });
+  const row = document.createElement("div");
+  row.className = "rowbtns";
+  const yes = document.createElement("button");
+  yes.type = "button";
+  yes.className = "ok";
+  yes.textContent = "Allow note change";
+  const no = document.createElement("button");
+  no.type = "button";
+  no.textContent = "Keep my note";
+  yes.onclick = async function () {
+    yes.disabled = no.disabled = true;
+    const r = await fetch("/api/ops/resolve", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ allow: true, ops: ops })
+    });
+    const d = await r.json();
+    renderContext(d.context);
+    updateBudget();
+  };
+  no.onclick = async function () {
+    yes.disabled = no.disabled = true;
+    const r = await fetch("/api/ops/resolve", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ allow: false, ops: ops })
+    });
+    const d = await r.json();
+    renderContext(d.context);
+  };
+  row.appendChild(yes);
+  row.appendChild(no);
+  wrap.appendChild(row);
+  box.appendChild(wrap);
 }
 
 function showPlan(box, files, commands) {
@@ -127,7 +257,7 @@ function showPlan(box, files, commands) {
   plan.className = "plan";
   const h = document.createElement("div");
   h.className = "plan-h";
-  h.textContent = "Proposed actions \u2014 nothing runs until you approve";
+  h.textContent = "Proposed actions — nothing runs until you approve";
   plan.appendChild(h);
   files.forEach(function (f) {
     const line = document.createElement("div");
@@ -162,13 +292,21 @@ async function apply(files, commands, box) {
   });
   const data = await r.json();
   if (!r.ok) throw new Error(data.error || "apply failed");
-  lastResults = data.results || [];
+  fullResults = data.results || [];
+  lastResults = fullResults.slice();
   attachmentNote = "full";
-  const blob = data.blob || attachmentBlob();
+  const blob = rawBlob(fullResults);
   const out = document.createElement("div");
   out.className = "term";
   out.textContent = blob || "done";
   box.appendChild(out);
+  if (data.warn) {
+    const w = document.createElement("div");
+    w.className = "hint";
+    w.style.marginTop = "8px";
+    w.textContent = "Output is large (~" + data.estTokens + " tokens). Use full anyway, or Summarize first. The next Send will include it.";
+    box.appendChild(w);
+  }
   const row = document.createElement("div");
   row.className = "rowbtns";
   function btn(label, cls, fn) {
@@ -180,46 +318,27 @@ async function apply(files, commands, box) {
     row.appendChild(b);
     return b;
   }
-  btn("Keep full", "ok", function () {
-    lastResults = data.results || [];
-    attachmentNote = "full";
-    renderAttach();
-    updateBudget();
+  btn("Use full on next send", "ok", function () { useFull(); });
+  btn("Summarize then attach", "", async function () {
+    try { await summarizeAttach(box); }
+    catch (e) { addMsg("err", e.message); }
   });
-  const zip = btn("Summarize", "", async function () {
-    zip.disabled = true;
-    try {
-      const pr = await fetch("/api/summarize-plan", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ content: blob, goal: "keep names that matter for the next question" })
-      });
-      const plan = await pr.json();
-      if (!pr.ok) throw new Error(plan.error || "plan failed");
-      const why = plan.instruction || "keep names";
-      const cr = await fetch("/api/compress", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ content: blob, instruction: why, label: "result", save: false })
-      });
-      const d = await cr.json();
-      if (!cr.ok) throw new Error(d.error || "summarize failed");
-      lastResults = [{ cmd: (lastResults[0] && lastResults[0].cmd) || "summary", code: 0, stdout: d.text || "", stderr: "" }];
-      attachmentNote = "summary";
-      const prev = document.createElement("div");
-      prev.className = "term";
-      prev.textContent = "Keep: " + why + "\n\n" + (d.text || "");
-      box.appendChild(prev);
-      renderAttach();
-      updateBudget();
-    } catch (e) {
-      addMsg("err", e.message);
-    } finally {
-      zip.disabled = false;
-    }
+  btn("Pin into notes", "", async function () {
+    const src = attachmentNote === "summary" ? rawBlob(lastResults) : blob;
+    const clip = src.length > 500 ? src.slice(0, 500) + "…" : src;
+    const rr = await fetch("/api/context/add", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text: clip, origin: "U" })
+    });
+    const d = await rr.json();
+    if (!rr.ok) throw new Error(d.error || "pin failed");
+    renderContext(d.context);
+    updateBudget();
   });
   btn("Drop", "", function () {
     lastResults = [];
+    fullResults = [];
     attachmentNote = "";
     renderAttach();
     updateBudget();
@@ -236,7 +355,7 @@ async function turn() {
   if (!text || busy) return;
   input.value = "";
   addMsg("user", text);
-  const pending = addMsg("bot", "\u2026");
+  const pending = addMsg("bot", "…");
   setBusy(true);
   const ac = new AbortController();
   const timer = setTimeout(function () { ac.abort(); }, 120000);
@@ -252,7 +371,8 @@ async function turn() {
     renderAttach();
     updateBudget();
     pending.body.textContent = (data.reason || data.display || "(no text)").trim();
-    if (ctxLocked) renderContext(data.context);
+    renderContext(data.context);
+    if (data.pendingOps && data.pendingOps.length) showPendingOps(pending.div, data.pendingOps);
     const files = data.files || [];
     const commands = data.commands || [];
     if (!files.length && !commands.length) return;
@@ -298,18 +418,28 @@ if (input) {
   input.addEventListener("input", updateBudget);
 }
 
-var attachDrop = document.getElementById("attachDrop");
-if (attachDrop) attachDrop.onclick = function () {
+function dropAttach() {
   lastResults = [];
+  fullResults = [];
   attachmentNote = "";
   renderAttach();
   updateBudget();
+}
+
+var attachDrop = document.getElementById("attachDrop");
+if (attachDrop) attachDrop.onclick = dropAttach;
+var attachFull = document.getElementById("attachFull");
+if (attachFull) attachFull.onclick = useFull;
+var attachSum = document.getElementById("attachSum");
+if (attachSum) attachSum.onclick = async function () {
+  try { await summarizeAttach(chat && chat.lastElementChild); }
+  catch (e) { addMsg("err", e.message); }
 };
 
 var testBtn = document.getElementById("test");
 if (testBtn) testBtn.onclick = async function () {
-  const box = addMsg("bot", "Running tests\u2026");
-  setBusy(true, "Self-test\u2026");
+  const box = addMsg("bot", "Running tests…");
+  setBusy(true, "Self-test…");
   try {
     const unit = await (await fetch("/api/selftest")).json();
     const lines = ["Runner " + unit.passed + "/" + unit.total + (unit.ok ? " PASS" : " FAIL")];
@@ -329,45 +459,23 @@ if (testBtn) testBtn.onclick = async function () {
 var clearBtn = document.getElementById("clear");
 if (clearBtn) clearBtn.onclick = async function () {
   await fetch("/api/context/clear", { method: "POST" });
-  ctxLocked = true;
-  setText(document.getElementById("ctxUnlock"), "Unlock");
-  var save = document.getElementById("ctxSave");
-  var add = document.getElementById("ctxAdd");
-  if (save) save.disabled = true;
-  if (add) add.disabled = true;
+  dropAttach();
   await refresh();
 };
 
-var unlockBtn = document.getElementById("ctxUnlock");
-if (unlockBtn) unlockBtn.onclick = function () {
-  ctxLocked = !ctxLocked;
-  setText(unlockBtn, ctxLocked ? "Unlock" : "Lock");
-  var save = document.getElementById("ctxSave");
-  var add = document.getElementById("ctxAdd");
-  if (save) save.disabled = ctxLocked;
-  if (add) add.disabled = ctxLocked;
-  renderContext();
-};
 var addBtn = document.getElementById("ctxAdd");
-if (addBtn) addBtn.onclick = function () {
-  if (ctxLocked) return;
-  ctxCache.push({ id: 0, text: "" });
-  renderContext();
-};
-var saveBtn = document.getElementById("ctxSave");
-if (saveBtn) saveBtn.onclick = async function () {
-  const r = await fetch("/api/context/set", {
+if (addBtn) addBtn.onclick = async function () {
+  const text = window.prompt("Note to pin (marked U — model needs your OK to change it)");
+  if (!text || !text.trim()) return;
+  const r = await fetch("/api/context/add", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ items: ctxCache })
+    body: JSON.stringify({ text: text.trim(), origin: "U" })
   });
   const d = await r.json();
-  if (!r.ok) throw new Error(d.error || "save failed");
-  ctxLocked = true;
-  setText(document.getElementById("ctxUnlock"), "Unlock");
-  saveBtn.disabled = true;
-  if (addBtn) addBtn.disabled = true;
+  if (!r.ok) throw new Error(d.error || "add failed");
   renderContext(d.context);
+  updateBudget();
 };
 
 refresh().catch(function (e) { addMsg("err", e.message); });
