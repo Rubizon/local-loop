@@ -113,7 +113,7 @@ function addCompressed(ctx, packed) {
 function loadMemory() {
   try {
     return fs.readFileSync(MEMORY_FILE, "utf8").split("\n").filter(Boolean).slice(-2000)
-      .map((line) => JSON.parse(line)).filter((row) => row && row.source !== "assistant");
+      .map((line) => JSON.parse(line)).filter((row) => row && row.source && row.source !== "assistant" && row.source !== "user");
   } catch (_) {
     return [];
   }
@@ -181,6 +181,17 @@ async function maybeCompressResult(result) {
   return { ...result, stdout: packed.text, stderr: "", compressed: packed };
 }
 
+function inferSimple(text) {
+  const t = String(text || "").trim();
+  if (/\/tmp/.test(t) && /(ls|list|show|go to|cd\s+\/tmp)/i.test(t)) {
+    return { display: "List /tmp with one command.", reason: "List /tmp with one command.", ops: [], files: [], commands: [{ cmd: "ls -la /tmp" }], compress: [] };
+  }
+  if (/^(ls|list(\s+files)?|show files)\s*$/i.test(t)) {
+    return { display: "List the current directory.", reason: "List the current directory.", ops: [], files: [], commands: [{ cmd: "ls -la" }], compress: [] };
+  }
+  return null;
+}
+
 async function callOllama({ userText, ctx, lastResults, memoryHits }) {
   const files = listWorkspace();
   const ctxBlock = contextText(ctx);
@@ -223,10 +234,10 @@ app.post("/api/turn", async (req, res) => {
     const ctx = loadContext();
     const ctxBlock = contextText(ctx);
     const memoryHits = retrieveMemory(text + "\n" + ctxBlock, MEMORY_K, ctxBlock);
-    const parsed = await callOllama({ userText: text, ctx, lastResults, memoryHits });
+    const parsed = inferSimple(text) || await callOllama({ userText: text, ctx, lastResults, memoryHits });
     const display = typeof parsed.display === "string" ? parsed.display : JSON.stringify(parsed);
     const ops = Array.isArray(parsed.ops) ? parsed.ops : [];
-    const files = Array.isArray(parsed.files) ? parsed.files : [];
+    const files = (Array.isArray(parsed.files) ? parsed.files : []).filter((f) => f && f.path && f.path !== "rel");
     const commands = Array.isArray(parsed.commands) ? parsed.commands : [];
     const compressReqs = Array.isArray(parsed.compress) ? parsed.compress : [];
     lib.applyOps(ctx, ops);
@@ -236,7 +247,7 @@ app.post("/api/turn", async (req, res) => {
     saveContext(ctx);
     appendMemory({ source: "user", text });
     for (const packed of compressed) appendMemory({ source: packed.label, text: packed.text });
-    res.json({ display, ops, files, commands, compress: compressReqs, compressed, memory: memoryHits, context: ctx.items });
+    res.json({ display, reason: parsed.reason || display, ops, files, commands, compress: compressReqs, compressed, memory: memoryHits, context: ctx.items });
   } catch (err) {
     res.status(500).json({ error: String(err.message || err) });
   }
