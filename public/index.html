@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>local-loop</title>
+  <style>
+    :root { color-scheme: dark; --bg:#111; --panel:#1b1b1b; --line:#333; --fg:#eee; --muted:#9aa; --acc:#8fd19e; }
+    * { box-sizing: border-box; }
+    body { margin:0; font:14px/1.4 system-ui,sans-serif; background:var(--bg); color:var(--fg); }
+    header { padding:12px 16px; border-bottom:1px solid var(--line); display:flex; gap:16px; flex-wrap:wrap; }
+    header span { color:var(--muted); }
+    main { display:grid; grid-template-columns: 1fr 280px; min-height: calc(100vh - 48px); }
+    #chat { padding:16px; overflow:auto; }
+    .msg { margin:0 0 12px; padding:10px 12px; background:var(--panel); border:1px solid var(--line); border-radius:8px; white-space:pre-wrap; }
+    .msg.user { border-color:#445; }
+    .pending { border-color:#665; }
+    .pending button { margin-right:8px; margin-top:8px; }
+    aside { border-left:1px solid var(--line); padding:16px; background:#151515; }
+    aside h2 { margin:0 0 8px; font-size:13px; color:var(--muted); font-weight:600; }
+    #ctx li { margin:0 0 8px; }
+    footer { position:sticky; bottom:0; padding:12px 16px; background:var(--bg); border-top:1px solid var(--line); }
+    textarea { width:100%; min-height:72px; background:#0d0d0d; color:var(--fg); border:1px solid var(--line); border-radius:8px; padding:8px; }
+    button { background:#2a2a2a; color:var(--fg); border:1px solid var(--line); border-radius:6px; padding:6px 10px; cursor:pointer; }
+    button.ok { background:#244; border-color:#385; color:var(--acc); }
+    @media (max-width: 800px) { main { grid-template-columns: 1fr; } aside { border-left:none; border-top:1px solid var(--line); } }
+  </style>
+</head>
+<body>
+  <header>
+    <strong>local-loop</strong>
+    <span id="meta"></span>
+    <button id="clear">clear context</button>
+    <button id="test">Test</button>
+  </header>
+  <main>
+    <div>
+      <div id="chat"></div>
+      <footer>
+        <textarea id="input" placeholder="Ask to create a file, run a command, or remember something…"></textarea>
+        <p><button class="ok" id="send">send</button></p>
+      </footer>
+    </div>
+    <aside>
+      <h2>context</h2>
+      <ol id="ctx"></ol>
+    </aside>
+  </main>
+  <script>
+    const chat = document.getElementById("chat");
+    const ctxEl = document.getElementById("ctx");
+    const input = document.getElementById("input");
+    const meta = document.getElementById("meta");
+    let lastResults = [];
+    function addMsg(role, text) {
+      const div = document.createElement("div");
+      div.className = "msg " + role;
+      div.textContent = text;
+      chat.appendChild(div);
+      chat.scrollTop = chat.scrollHeight;
+      return div;
+    }
+    function renderContext(items) {
+      ctxEl.innerHTML = "";
+      (items || []).forEach((it) => {
+        const li = document.createElement("li");
+        li.textContent = it.id + ". " + it.text;
+        ctxEl.appendChild(li);
+      });
+    }
+    async function refresh() {
+      const r = await fetch("/api/state");
+      const s = await r.json();
+      meta.textContent = s.model + " · " + s.workspace;
+      renderContext(s.context);
+    }
+    async function apply(files, commands, box) {
+      const r = await fetch("/api/apply", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ files, commands }),
+      });
+      const data = await r.json();
+      if (!r.ok) throw new Error(data.error || "apply failed");
+      lastResults = data.results || [];
+      const lines = [];
+      if (data.written && data.written.length) lines.push("wrote: " + data.written.join(", "));
+      for (const res of lastResults) {
+        lines.push("$ " + res.cmd + "  (exit " + res.code + ")");
+        if (res.stdout) lines.push(res.stdout);
+        if (res.stderr) lines.push(res.stderr);
+      }
+      box.textContent += "\n\n" + (lines.join("\n") || "done");
+      await refresh();
+      const again = document.createElement("button");
+      again.textContent = "send output to model";
+      box.appendChild(document.createElement("br"));
+      box.appendChild(again);
+      again.onclick = () => {
+        const bits = (lastResults || []).map((r) =>
+          "$ " + r.cmd + " exit " + r.code + "\n" + (r.stdout || "") + "\n" + (r.stderr || "")
+        );
+        input.value = "Use these command results:\n" + bits.join("\n");
+        turn();
+      };
+    }
+    let busy = false;
+    async function turn() {
+      const text = input.value.trim();
+      if (!text || busy) return;
+      busy = true;
+      input.value = "";
+      addMsg("user", text);
+      const pending = addMsg("bot", "…");
+      try {
+        const r = await fetch("/api/turn", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text, lastResults }),
+        });
+        const data = await r.json();
+        if (!r.ok) throw new Error(data.error || "turn failed");
+        lastResults = [];
+        pending.textContent = data.display || "(no display)";
+        if (data.memory && data.memory.length) {
+          pending.textContent += "\n\nmemory:\n" + data.memory.map((m) => m.source + ": " + m.text).join("\n");
+        }
+        if (data.compressed && data.compressed.length) {
+          pending.textContent += "\n\ncompressed:\n" + data.compressed.map((c) => c.label + " → " + c.text).join("\n");
+        }
+        renderContext(data.context);
+        const files = data.files || [];
+        const commands = data.commands || [];
+        if (!files.length && !commands.length) return;
+        pending.classList.add("pending");
+        const pre = document.createElement("pre");
+        pre.textContent = JSON.stringify({ files, commands }, null, 2);
+        pending.appendChild(pre);
+        const yes = document.createElement("button");
+        yes.className = "ok";
+        yes.textContent = "run / write";
+        const no = document.createElement("button");
+        no.textContent = "skip";
+        pending.appendChild(yes);
+        pending.appendChild(no);
+        yes.onclick = async () => {
+          yes.disabled = no.disabled = true;
+          try { await apply(files, commands, pending); }
+          catch (e) { pending.textContent += "\n" + e.message; }
+        };
+        no.onclick = () => { yes.disabled = no.disabled = true; pending.textContent += "\n(skipped)"; };
+      } catch (e) {
+        pending.textContent = e.message;
+      } finally {
+        busy = false;
+      }
+    }
+    document.getElementById("send").onclick = turn;
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) turn();
+    });
+    document.getElementById("test").onclick = async () => {
+      const box = addMsg("bot", "running tests…");
+      try {
+        const unit = await (await fetch("/api/selftest")).json();
+        let lines = ["runner " + unit.passed + "/" + unit.total + (unit.ok ? " PASS" : " FAIL")];
+        (unit.results || []).forEach((r) => lines.push((r.ok ? "PASS" : "FAIL") + " " + r.name));
+        const mr = await fetch("/api/model-test", { method: "POST" });
+        const model = await mr.json();
+        if (!mr.ok) {
+          lines.push("model FAIL " + (model.error || mr.status));
+        } else {
+          lines.push("model " + model.model + " " + model.passed + "/" + model.total + (model.ok ? " PASS" : " FAIL"));
+          (model.checks || []).forEach((c) => lines.push((c.ok ? "PASS" : "FAIL") + " " + c.name));
+          if (model.display) lines.push("display: " + model.display);
+        }
+        box.textContent = lines.join("\n");
+      } catch (e) {
+        box.textContent = e.message;
+      }
+    };
+    document.getElementById("clear").onclick = async () => {
+      await fetch("/api/context/clear", { method: "POST" });
+      lastResults = [];
+      await refresh();
+    };
+    refresh();
+  </script>
+</body>
+</html>
