@@ -40,24 +40,6 @@ function trimContext(ctx) {
   return ctx;
 }
 
-function listWorkspace(limit = 24) {
-  const names = [];
-  function walk(dir, depth) {
-    if (names.length >= limit || depth > 2) return;
-    let ents;
-    try { ents = fs.readdirSync(dir, { withFileTypes: true }); } catch (_) { return; }
-    for (const e of ents) {
-      if (names.length >= limit) break;
-      if (e.name.startsWith(".") || e.name === "node_modules" || e.name === "data") continue;
-      const rel = path.relative(WORKSPACE, path.join(dir, e.name));
-      names.push(e.isDirectory() ? rel + "/" : rel);
-      if (e.isDirectory()) walk(path.join(dir, e.name), depth + 1);
-    }
-  }
-  walk(WORKSPACE, 0);
-  return names;
-}
-
 function runCommand(cmd) {
   const safe = lib.assertSafeCmd(cmd);
   return new Promise((resolve) => {
@@ -72,7 +54,7 @@ function runCommand(cmd) {
   });
 }
 
-const COMPRESS_SYSTEM = "Summarize a shell listing. Names and one-line roles only. Never mention gzip. Never list files from another directory.";
+const COMPRESS_SYSTEM = "Summarize a shell listing. Names and one-line roles only. Never mention gzip. Never invent files from another directory.";
 
 async function ollamaText(system, user, numPredict = 280) {
   const res = await fetch(`${OLLAMA_HOST}/api/chat`, {
@@ -110,70 +92,6 @@ function addCompressed(ctx, packed) {
   });
 }
 
-function loadMemory() {
-  try {
-    return fs.readFileSync(MEMORY_FILE, "utf8").split("\n").filter(Boolean).slice(-2000)
-      .map((line) => JSON.parse(line)).filter((row) => row && row.source && row.source !== "assistant" && row.source !== "user" && row.source !== "chat");
-  } catch (_) {
-    return [];
-  }
-}
-
-function appendMemory(entry) {
-  fs.mkdirSync(path.dirname(MEMORY_FILE), { recursive: true });
-  const row = {
-    id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
-    ts: new Date().toISOString(),
-    source: entry.source || "chat",
-    text: String(entry.text || "").slice(0, 1500),
-  };
-  if (!row.text.trim()) return null;
-  fs.appendFileSync(MEMORY_FILE, JSON.stringify(row) + "\n");
-  return row;
-}
-
-function retrieveMemory(query, k = MEMORY_K, ctxText = "") {
-  const q = lib.tokenize(query);
-  const already = lib.tokenize(ctxText);
-  return loadMemory()
-    .map((chunk) => {
-      const tokens = lib.tokenize(chunk.text);
-      let novel = 0;
-      for (const t of tokens) if (q.has(t) && !already.has(t)) novel += 1;
-      return { ...chunk, score: lib.scoreChunk(q, chunk), novel };
-    })
-    .filter((c) => c.score > 0 && c.novel > 0)
-    .sort((a, b) => b.score - a.score || b.novel - a.novel)
-    .slice(0, k)
-    .map((c) => ({ ...c, text: lib.clip(c.text, 400) }));
-}
-
-async function resolveCompressList(list, lastResults) {
-  const out = [];
-  if (!Array.isArray(list)) return out;
-  for (const req of list.slice(0, 3)) {
-    if (!req || typeof req !== "object") continue;
-    const instruction = req.instruction || req.why || "";
-    if (req.source === "file" && req.path) {
-      const dest = lib.safeRelPath(req.path, WORKSPACE);
-      out.push(await compress({ content: fs.readFileSync(dest, "utf8"), instruction, label: "file:" + req.path }));
-    } else if (req.source === "output") {
-      const r = (lastResults || [])[Number(req.index || 0)];
-      if (!r) throw new Error("no command output at index " + req.index);
-      out.push(await compress({
-        content: `$ ${r.cmd}\nexit ${r.code}\n${r.stdout || ""}\n${r.stderr || ""}`,
-        instruction,
-        label: "output:" + (r.cmd || req.index),
-      }));
-    }
-  }
-  return out;
-}
-
-async function maybeCompressResult(result) {
-  return { ...result, compressed: null };
-}
-
 function inferSimple(text) {
   const t = String(text || "").trim();
   if (/\/tmp/.test(t) && /(ls|list|show|go to|cd\s+\/tmp)/i.test(t)) {
@@ -185,43 +103,13 @@ function inferSimple(text) {
   return null;
 }
 
-function inferFollowup(text, lastResults) {
-  const t = String(text || "").toLowerCase();
-  const last = Array.isArray(lastResults) && lastResults[0];
-  if (!last) return null;
-  const blob = String(last.cmd || "") + " " + String(last.stdout || "") + " " + String(last.cwd || "");
-  const fromTmp = /\/tmp/.test(blob) || /aider|mini-coder|Modelfile/.test(blob);
-  if (/working directory|\bcwd\b/.test(t)) {
-    return {
-      display: fromTmp ? "That listing was /tmp." : ("Last command cwd is the project unless the command had an absolute path: " + last.cmd),
-      reason: fromTmp ? "That listing was /tmp." : ("Last command: " + last.cmd),
-      ops: [], files: [], commands: [], compress: []
-    };
-  }
-  if (/these files|what are they|describe/.test(t) && fromTmp) {
-    return {
-      display: "Those names are /tmp entries from `ls -la /tmp`: world-writable temp, X11/systemd private dirs, plus your folders aider and mini-coder. Not the local-loop repo (LICENSE, server.js, public/).",
-      reason: "Those names are /tmp entries from `ls -la /tmp`: world-writable temp, X11/systemd private dirs, plus your folders aider and mini-coder. Not the local-loop repo (LICENSE, server.js, public/).",
-      ops: [], files: [], commands: [], compress: []
-    };
-  }
-  return null;
-}
-
-async function callOllama({ userText, ctx, lastResults, memoryHits }) {
-  const files = listWorkspace();
-  const ctxBlock = contextText(ctx);
+async function callOllama({ userText, ctx, lastResults }) {
   const parts = [];
-  if (files.length && !(lastResults && lastResults.length)) {
-    parts.push("Project workspace (local-loop app, NOT /tmp):\n" + files.join("\n"));
-  }
-  if (ctxBlock) parts.push("Context:\n" + ctxBlock);
-  if (memoryHits && memoryHits.length && !(lastResults && lastResults.length)) {
-    parts.push("Memory:\n" + memoryHits.map((m) => `- ${m.source}: ${m.text}`).join("\n"));
-  }
+  const ctxBlock = contextText(ctx);
+  if (ctxBlock) parts.push("Working notes:\n" + ctxBlock);
   if (lastResults && lastResults.length) {
-    parts.push("Attached command output (this is what \"these files\" refers to):\n" + lastResults.map((r) =>
-      `$ ${r.cmd} [${r.code}]\n${lib.clip(r.stdout || "", 2000)}${r.stderr ? "\n" + lib.clip(r.stderr, 400) : ""}`
+    parts.push("Command output:\n" + lastResults.map((r) =>
+      `$ ${r.cmd} [${r.code}]\n${lib.clip(r.stdout || "", 3000)}${r.stderr ? "\n" + lib.clip(r.stderr, 400) : ""}`
     ).join("\n"));
   }
   parts.push("User:\n" + lib.clip(userText, 2000));
@@ -250,20 +138,16 @@ app.post("/api/turn", async (req, res) => {
     if (!text) return res.status(400).json({ error: "empty text" });
     const lastResults = Array.isArray(req.body.lastResults) ? req.body.lastResults : [];
     const ctx = loadContext();
-    const ctxBlock = contextText(ctx);
-    const memoryHits = lastResults.length ? [] : retrieveMemory(text + "\n" + ctxBlock, MEMORY_K, ctxBlock);
-    const parsed = inferSimple(text) || inferFollowup(text, lastResults) || await callOllama({ userText: text, ctx, lastResults, memoryHits });
+    const parsed = inferSimple(text) || await callOllama({ userText: text, ctx, lastResults });
     const display = typeof parsed.display === "string" ? parsed.display : JSON.stringify(parsed);
     const ops = Array.isArray(parsed.ops) ? parsed.ops : [];
     const files = (Array.isArray(parsed.files) ? parsed.files : []).filter((f) => f && f.path && f.path !== "rel");
     const commands = Array.isArray(parsed.commands) ? parsed.commands : [];
     const compressReqs = Array.isArray(parsed.compress) ? parsed.compress : [];
     lib.applyOps(ctx, ops);
-    const compressed = await resolveCompressList(compressReqs, lastResults);
-    for (const packed of compressed) addCompressed(ctx, packed);
     trimContext(ctx);
     saveContext(ctx);
-    res.json({ display, reason: parsed.reason || display, ops, files, commands, compress: compressReqs, compressed, memory: memoryHits, context: ctx.items });
+    res.json({ display, reason: parsed.reason || display, ops, files, commands, compress: compressReqs, context: ctx.items });
   } catch (err) {
     res.status(500).json({ error: String(err.message || err) });
   }
@@ -317,13 +201,6 @@ app.post("/api/compress", async (req, res) => {
   }
 });
 
-app.get("/api/memory", (_req, res) => res.json({ items: loadMemory().slice(-80) }));
-app.post("/api/memory/search", (req, res) => res.json({ items: retrieveMemory(String((req.body && req.body.q) || "")) }));
-app.post("/api/memory/clear", (_req, res) => {
-  fs.mkdirSync(path.dirname(MEMORY_FILE), { recursive: true });
-  fs.writeFileSync(MEMORY_FILE, "");
-  res.json({ ok: true });
-});
 app.post("/api/context/clear", (_req, res) => {
   saveContext({ nextId: 1, items: [] });
   res.json({ context: [] });
