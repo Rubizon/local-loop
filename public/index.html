@@ -4,65 +4,58 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>local-loop</title>
-  <style>
-    :root { color-scheme: dark; --bg:#0e0e10; --panel:#1a1a1f; --line:#2c2c34; --fg:#eee; --muted:#8b8b97; --acc:#7dcea0; --user:#2a3344; --err:#5c2a2a; }
-    * { box-sizing: border-box; }
-    html, body { height: 100%; margin: 0; }
-    body { font: 14px/1.45 system-ui, sans-serif; background: var(--bg); color: var(--fg); display: flex; flex-direction: column; }
-    header { padding: 10px 16px; border-bottom: 1px solid var(--line); display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
-    header span { color: var(--muted); font-size: 12px; }
-    #status { color: #c9a227; font-size: 12px; }
-    main { flex: 1; display: grid; grid-template-columns: 1fr 280px; min-height: 0; }
-    #thread { display: flex; flex-direction: column; min-height: 0; }
-    #chat { flex: 1; overflow: auto; padding: 16px; }
-    .msg { margin: 0 0 10px; padding: 10px 12px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; white-space: pre-wrap; }
-    .msg.user { background: var(--user); }
-    .msg.err { background: var(--err); }
-    .msg .who { font-size: 11px; color: var(--muted); margin-bottom: 4px; }
-    .pending { border-color: #665; }
-    .actions { margin-top: 8px; font-family: ui-monospace, monospace; font-size: 12px; background: #111; padding: 8px; border-radius: 6px; }
-    .rowbtns { margin-top: 8px; display: flex; gap: 8px; flex-wrap: wrap; }
-    aside { border-left: 1px solid var(--line); padding: 16px; background: #141418; overflow: auto; }
-    aside h2 { margin: 0 0 8px; font-size: 12px; color: var(--muted); }
-    #ctx { margin: 0; padding-left: 18px; }
-    footer { padding: 12px 16px; border-top: 1px solid var(--line); background: #121214; }
-    textarea { width: 100%; min-height: 64px; background: #0d0d0f; color: var(--fg); border: 1px solid var(--line); border-radius: 8px; padding: 8px; }
-    button { background: #2a2a32; color: var(--fg); border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px; cursor: pointer; }
-    button:disabled { opacity: .5; cursor: not-allowed; }
-    button.ok { background: #1e3a2f; border-color: #385; color: var(--acc); }
-    .hint { color: var(--muted); font-size: 12px; margin: 6px 0 0; }
-    @media (max-width: 800px) { main { grid-template-columns: 1fr; } aside { border-left: none; border-top: 1px solid var(--line); max-height: 160px; } }
-  </style>
+  <link rel="stylesheet" href="/app.css" />
 </head>
 <body>
   <header>
-    <strong>local-loop</strong>
-    <span id="meta"></span>
-    <span id="status"></span>
-    <span style="flex:1"></span>
-    <button type="button" id="clear">clear context</button>
-    <button type="button" id="test">Test</button>
+    <div class="brand">
+      <strong>local-loop</strong>
+      <span class="chip" id="chipModel">model</span>
+      <span class="chip" id="chipCwd" title="session cwd">cwd</span>
+    </div>
+    <span id="status" class="status"></span>
+    <div class="header-actions">
+      <button type="button" id="test">Self-test</button>
+      <button type="button" id="clear">Clear notes</button>
+    </div>
   </header>
+
   <main>
-    <div id="thread">
+    <section id="thread">
       <div id="chat"></div>
       <footer>
-        <div id="attach" class="hint"></div>
-        <textarea id="input" placeholder="e.g. list files in the workspace"></textarea>
-        <p class="hint" id="budget">prompt ~0 / 8192 tokens</p>
-        <p class="hint">Enter to send · Shift+Enter newline · output attaches to the next send</p>
-        <p><button class="ok" type="button" id="send">send</button></p>
+        <div id="attach" class="attach off">
+          <span class="attach-dot"></span>
+          <span id="attachText">No output attached</span>
+        </div>
+        <textarea id="input" placeholder="Ask something. Approve before any command or write."></textarea>
+        <div class="composer-bar">
+          <span id="budget" class="meter">prompt ~0 / 8192</span>
+          <span class="hint">Enter send · Shift+Enter newline</span>
+          <button class="ok" type="button" id="send">Send</button>
+        </div>
       </footer>
-    </div>
+    </section>
+
     <aside>
-      <h2>working context</h2>
-      <p class="hint">Short facts. Unlock to edit. The model can also change lines when locked.</p>
-      <p class="rowbtns">
-        <button type="button" id="ctxUnlock">unlock</button>
-        <button type="button" id="ctxSave" class="ok" disabled>save</button>
-        <button type="button" id="ctxAdd" disabled>add line</button>
-      </p>
-      <ol id="ctx"></ol>
+      <section class="rail-block">
+        <h2>Notes</h2>
+        <p class="hint">Short facts for the next prompt. Unlock to edit by hand.</p>
+        <div class="rowbtns">
+          <button type="button" id="ctxUnlock">Unlock</button>
+          <button type="button" id="ctxAdd" disabled>Add</button>
+          <button type="button" id="ctxSave" class="ok" disabled>Save</button>
+        </div>
+        <ol id="ctx"></ol>
+      </section>
+      <section class="rail-block">
+        <h2>Attachment</h2>
+        <p class="hint">Command output rides with the next Send until you drop it.</p>
+        <p id="attachDetail" class="attach-detail">None</p>
+        <div class="rowbtns">
+          <button type="button" id="attachDrop">Drop</button>
+        </div>
+      </section>
     </aside>
   </main>
   <script src="/app.js"></script>
