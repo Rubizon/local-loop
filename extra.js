@@ -3,6 +3,44 @@ const path = require("path");
 const lib = require("./lib");
 const { app } = require("./server");
 
+function inferFollowup(text, lastResults) {
+  const t = String(text || "").toLowerCase();
+  const last = Array.isArray(lastResults) && lastResults[0];
+  if (!last) return null;
+  const blob = String(last.cmd || "") + " " + String(last.stdout || "");
+  const fromTmp = /\/tmp/.test(blob) || /aider|mini-coder|Modelfile/.test(blob);
+  if (!fromTmp) return null;
+  if (/working directory|\bcwd\b/.test(t)) {
+    return { display: "That listing was produced in /tmp.", reason: "That listing was produced in /tmp." };
+  }
+  if (/these files|what are they|describe/.test(t)) {
+    return {
+      display: "Those names are /tmp entries: temp dirs, sockets, X11/systemd private dirs, plus folders like aider and mini-coder.",
+      reason: "Those names are /tmp entries: temp dirs, sockets, X11/systemd private dirs, plus folders like aider and mini-coder.",
+    };
+  }
+  return null;
+}
+
+function interceptTurn(req, res, next) {
+  if (req.method !== "POST" || req.path !== "/api/turn") return next();
+  const hit = inferFollowup(req.body && req.body.text, req.body && req.body.lastResults);
+  if (!hit) return next();
+  return res.json({
+    display: hit.display,
+    reason: hit.reason,
+    ops: [],
+    files: [],
+    commands: [],
+    compress: [],
+    context: loadContext().items,
+  });
+}
+app.use(interceptTurn);
+if (app._router && app._router.stack && app._router.stack.length) {
+  app._router.stack.unshift(app._router.stack.pop());
+}
+
 const PORT = Number(process.env.PORT || 3847);
 const OLLAMA_HOST = (process.env.OLLAMA_HOST || "http://127.0.0.1:11434").replace(/\/$/, "");
 const OLLAMA_MODEL = process.env.OLLAMA_MODEL || "qwen2.5-coder:3b-8k";
