@@ -13,7 +13,7 @@ async function runModelProbe() {
       stream: false,
       options: { temperature: 0.1, num_ctx: 8192, num_predict: 120 },
       messages: [
-        { role: "system", content: lib.SYSTEM },
+        { role: "system", content: lib.SYSTEM_A },
         { role: "user", content: lib.MODEL_PROBE_USER },
       ],
     }),
@@ -22,7 +22,7 @@ async function runModelProbe() {
   if (!res.ok) throw new Error(`Ollama HTTP ${res.status}: ${body}`);
   const data = JSON.parse(body);
   const raw = String((data.message && data.message.content) || "");
-  const parsed = lib.extractJson(raw);
+  const parsed = lib.parseDirect(raw);
   return { raw: lib.clip(raw, 800), parsed, model: OLLAMA_MODEL, ...lib.scoreModelReply(parsed, raw) };
 }
 
