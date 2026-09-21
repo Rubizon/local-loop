@@ -9,11 +9,13 @@ const PORT = Number(process.env.PORT || 3847);
 const OLLAMA_HOST = (process.env.OLLAMA_HOST || "http://127.0.0.1:11434").replace(/\/$/, "");
 const OLLAMA_MODEL = process.env.OLLAMA_MODEL || "qwen2.5-coder:3b-8k";
 const WORKSPACE = path.resolve(process.env.WORKSPACE || process.cwd());
-const CONTEXT_FILE = path.resolve(process.env.CONTEXT_FILE || path.join(__dirname, "data", "context.json"));
-const NUM_CTX = Number(process.env.OLLAMA_NUM_CTX || 8192);
+const CONTEXT_FILE = path.resolve(process.env.CONTEXT_FILE || path.join(__dirname, "data", "context.txt"));
+const NUM_CTX = lib.NUM_CTX;
 
 let sessionCwd = WORKSPACE;
 const CWD_ALLOW = [WORKSPACE, "/tmp", os.homedir()].map((p) => path.resolve(p));
+let ledger = [];
+let lastGoodStep = null;
 
 const app = express();
 app.use(express.json({ limit: "2mb" }));
@@ -21,25 +23,15 @@ app.use(express.static(path.join(__dirname, "public")));
 
 function loadContext() {
   try {
-    const data = JSON.parse(fs.readFileSync(CONTEXT_FILE, "utf8"));
-    if (Array.isArray(data.items)) return data;
-  } catch (_) {}
-  return { nextId: 1, items: [] };
+    return fs.readFileSync(CONTEXT_FILE, "utf8");
+  } catch (_) {
+    return "";
+  }
 }
 
-function saveContext(ctx) {
+function saveContext(text) {
   fs.mkdirSync(path.dirname(CONTEXT_FILE), { recursive: true });
-  fs.writeFileSync(CONTEXT_FILE, JSON.stringify(ctx, null, 2));
-}
-
-function contextText(ctx) {
-  if (!ctx.items.length) return "";
-  return ctx.items.map((it) => `${it.id} [${it.origin === "U" ? "U" : "A"}] ${lib.clip(it.text, 280)}`).join("\n");
-}
-
-function trimContext(ctx) {
-  if (ctx.items.length > lib.CONTEXT_MAX) ctx.items = ctx.items.slice(-lib.CONTEXT_MAX);
-  return ctx;
+  fs.writeFileSync(CONTEXT_FILE, String(text || ""), "utf8");
 }
 
 function resolveCwd(p) {
@@ -55,25 +47,40 @@ function parseCd(cmd) {
   return m ? m[1] : null;
 }
 
-function runCommand(cmd, cwd) {
+function runCommand(cmd, cwd, stepId) {
   const safe = lib.assertSafeCmd(cmd);
   const dest = cwd || sessionCwd;
+  const write = safe.match(/^echo\s+([\s\S]+?)\s*>\s*(\S+)$/);
+  if (write) {
+    const abs = path.isAbsolute(write[2]) ? write[2] : path.resolve(dest, write[2]);
+    const allowed = CWD_ALLOW.some((root) => abs === root || abs.startsWith(root + path.sep));
+    if (!allowed) throw new Error("write not allowed: " + abs);
+    const before = fs.existsSync(abs) ? fs.readFileSync(abs, "utf8") : null;
+    fs.mkdirSync(path.dirname(abs), { recursive: true });
+    fs.writeFileSync(abs, write[1].replace(/^["']|["']$/g, ""), "utf8");
+    if (stepId) lib.recordWrite(ledger, stepId, abs, before);
+    return Promise.resolve({ cmd: safe, cwd: dest, code: 0, stdout: "wrote " + abs, stderr: "" });
+  }
   return new Promise((resolve) => {
     exec(safe, { cwd: dest, timeout: 20000, maxBuffer: 200000, env: process.env }, (err, stdout, stderr) => {
-      resolve({
+      const result = {
         cmd: safe,
         cwd: dest,
         code: err && Number.isFinite(err.code) ? err.code : err ? 1 : 0,
         stdout: String(stdout || "").slice(0, 8000),
         stderr: String(stderr || "").slice(0, 4000),
-        mode: "full",
-      });
+      };
+      if (stepId && /^zip\b/.test(safe) && result.code === 0) {
+        const out = (safe.match(/(\S+\.zip)/) || [])[1];
+        if (out) {
+          const abs = path.isAbsolute(out) ? out : path.resolve(dest, out);
+          lib.recordWrite(ledger, stepId, abs, null);
+        }
+      }
+      resolve(result);
     });
   });
 }
-
-const COMPRESS_SYSTEM =
-  "Summarize a shell listing. Keep names and one-line roles. Do not mention gzip. Do not invent files from another directory.";
 
 async function ollamaText(system, user, numPredict = 280) {
   const res = await fetch(`${OLLAMA_HOST}/api/chat`, {
@@ -95,109 +102,100 @@ async function ollamaText(system, user, numPredict = 280) {
   return String((data.message && data.message.content) || "").trim();
 }
 
-async function compress({ content, instruction, label }) {
-  const src = String(content || "");
-  const why = String(instruction || "keep names").trim();
-  const clipped = src.length > 8000 ? src.slice(0, 8000) + "\n[truncated]" : src;
-  const text = await ollamaText(
-    COMPRESS_SYSTEM,
-    `Label: ${label || "snippet"}\nInstruction: ${why}\nContent:\n${clipped || "(empty)"}`,
-    220
-  );
-  return { label: label || "compress", instruction: why, text: text || "(empty)" };
-}
-
-function inferSimple(text) {
-  const t = String(text || "").trim();
-  if (/\/tmp/.test(t) && /(ls|list|show|go to|cd\s+\/tmp)/i.test(t)) {
-    return {
-      display: "Run one listing command on /tmp.",
-      reason: "Run one listing command on /tmp.",
-      ops: [],
-      files: [],
-      commands: [{ cmd: "ls -la /tmp" }],
-      compress: [],
-    };
-  }
-  if (/^(ls|list(\s+files)?|show files)\s*$/i.test(t)) {
-    return {
-      display: "List the current directory.",
-      reason: "List the current directory.",
-      ops: [],
-      files: [],
-      commands: [{ cmd: "ls -la" }],
-      compress: [],
-    };
-  }
-  return null;
-}
-
-async function callOllama({ userText, ctx, lastResults }) {
-  const parts = [];
-  const ctxBlock = contextText(ctx);
-  if (ctxBlock) parts.push("Notes:\n" + ctxBlock);
-  const attached = lib.formatAttachment(lastResults);
-  if (attached) parts.push("Attached output (use this; do not invent other files):\n" + attached);
-  parts.push("User:\n" + lib.clip(userText, 2000));
-  const raw = await ollamaText(lib.SYSTEM, parts.join("\n\n"), 400);
-  const parsed = lib.extractJson(raw);
-  parsed.reason = parsed.display || parsed.reason || "";
-  return parsed;
-}
-
-async function runModelProbe() {
-  const raw = await ollamaText(lib.SYSTEM, lib.MODEL_PROBE_USER, 120);
-  const parsed = lib.extractJson(raw);
-  return { raw: lib.clip(raw, 800), parsed, model: OLLAMA_MODEL, ...lib.scoreModelReply(parsed, raw) };
-}
-
 app.get("/api/state", (_req, res) => {
   res.json({
     model: OLLAMA_MODEL,
     workspace: WORKSPACE,
     cwd: sessionCwd,
     numCtx: NUM_CTX,
-    context: loadContext().items,
+    context: loadContext(),
   });
 });
 app.get("/api/selftest", (_req, res) => res.json(lib.runUnitTests()));
 app.post("/api/model-test", async (_req, res) => {
   try {
-    res.json(await runModelProbe());
+    const raw = await ollamaText(lib.SYSTEM_A, lib.MODEL_PROBE_USER, 80);
+    const parsed = lib.parseDirect(raw);
+    res.json({ model: OLLAMA_MODEL, raw: lib.clip(raw, 400), ...lib.scoreModelReply(parsed, raw) });
   } catch (err) {
     res.status(500).json({ ok: false, error: String(err.message || err), model: OLLAMA_MODEL });
   }
+});
+
+app.post("/api/prompt-stats", (req, res) => {
+  const text = String((req.body && req.body.text) || "");
+  const extra = String((req.body && req.body.extra) || "");
+  res.json(lib.estimatePrompt(loadContext(), text, extra));
 });
 
 app.post("/api/turn", async (req, res) => {
   try {
     const text = String((req.body && req.body.text) || "").trim();
     if (!text) return res.status(400).json({ error: "empty text" });
-    const lastResults = Array.isArray(req.body.lastResults) ? req.body.lastResults : [];
-    const ctx = loadContext();
-    const parsed = inferSimple(text) || (await callOllama({ userText: text, ctx, lastResults }));
-    const display = typeof parsed.display === "string" ? parsed.display : JSON.stringify(parsed);
-    const ops = Array.isArray(parsed.ops) ? parsed.ops : [];
-    const files = (Array.isArray(parsed.files) ? parsed.files : []).filter(
-      (f) => f && f.path && f.path !== "rel" && !/^(cd|ls)\b/.test(String(f.content || "").trim())
-    );
-    let commands = Array.isArray(parsed.commands) ? parsed.commands : [];
-    commands = commands.map((c) => (typeof c === "string" ? { cmd: c } : c)).filter((c) => c && c.cmd);
-    if (commands.length === 2 && parseCd(commands[0].cmd) && /^ls\b/.test(commands[1].cmd)) {
-      commands = [{ cmd: commands[1].cmd, cwd: parseCd(commands[0].cmd) }];
+    const context = loadContext();
+    const forced = req.body.forced === "A" || req.body.forced === "B" ? req.body.forced : null;
+    const pick = lib.pickMode(text, context, forced);
+    if (pick.mode === "A") {
+      const simple = lib.heuristicDirect(text);
+      const parsed = simple || lib.parseDirect(await ollamaText(
+        lib.SYSTEM_A,
+        "Working context:\n" + (context || "(empty)") + "\n\nUser:\n" + lib.clip(text, 2000),
+        400
+      ));
+      return res.json({ mode: "A", why: pick.why, display: parsed.display, cmd: parsed.cmd, context });
     }
-    const split = lib.applyOps(ctx, ops, { protectUser: true });
-    trimContext(ctx);
-    saveContext(ctx);
-    res.json({
-      display,
-      reason: parsed.reason || display,
-      ops,
-      pendingOps: split.pending || [],
-      files,
-      commands,
-      context: ctx.items,
-    });
+    const simple = lib.heuristicPlan(text);
+    let plan;
+    let display;
+    if (simple) {
+      plan = simple;
+      display = "Plan: " + simple.goal.replace(/^KEEP GOAL:\s*/i, "");
+    } else {
+      const raw = await ollamaText(
+        lib.SYSTEM_PLAN,
+        "Working context:\n" + (context || "(empty)") + "\n\nUser:\n" + lib.clip(text, 2000),
+        500
+      );
+      plan = lib.parsePlan(raw, text);
+      display = String(lib.extractJson(raw).display || "Plan ready.");
+    }
+    ledger = [];
+    lastGoodStep = null;
+    res.json({ mode: "B", why: pick.why, display, plan, context });
+  } catch (err) {
+    res.status(500).json({ error: String(err.message || err) });
+  }
+});
+
+app.post("/api/add", async (req, res) => {
+  try {
+    const b = req.body || {};
+    const context = loadContext();
+    const userText = String(b.userText || "");
+    const skip = lib.heuristicRewrite(context, userText, b.display || "", b.output || "");
+    let proposed = "";
+    if (skip !== null) {
+      proposed = skip;
+    } else try {
+      const raw = await ollamaText(
+        lib.SYSTEM_REWRITE,
+        [
+          "Current context:\n" + (context || "(empty)"),
+          "User prompt:\n" + lib.clip(userText, 1200),
+          "Model reply:\n" + lib.clip(b.display || "", 1200),
+          b.output ? "Command output:\n" + lib.clip(b.output, 2000) : "",
+        ]
+          .filter(Boolean)
+          .join("\n\n"),
+        280
+      );
+      proposed = String(lib.extractJson(raw).context || "");
+    } catch (_) {
+      proposed = context;
+    }
+    const next = lib.finalizeRewrite(context, proposed, userText);
+    saveContext(next);
+    res.json({ context: next });
   } catch (err) {
     res.status(500).json({ error: String(err.message || err) });
   }
@@ -205,137 +203,141 @@ app.post("/api/turn", async (req, res) => {
 
 app.post("/api/apply", async (req, res) => {
   try {
-    const files = Array.isArray(req.body && req.body.files) ? req.body.files : [];
-    const commands = Array.isArray(req.body && req.body.commands) ? req.body.commands : [];
-    const written = [];
-    for (const f of files) {
-      if (!f || f.action !== "write") continue;
-      const dest = lib.safeRelPath(f.path, WORKSPACE);
-      fs.mkdirSync(path.dirname(dest), { recursive: true });
-      fs.writeFileSync(dest, String(f.content ?? ""), "utf8");
-      written.push(path.relative(WORKSPACE, dest));
+    const cmd = String((req.body && req.body.cmd) || "").trim();
+    const stepId = req.body && req.body.stepId ? String(req.body.stepId) : null;
+    const cdTo = parseCd(cmd);
+    if (cdTo) {
+      sessionCwd = resolveCwd(cdTo);
+      return res.json({
+        result: { cmd, cwd: sessionCwd, code: 0, stdout: "cwd=" + sessionCwd, stderr: "" },
+        cwd: sessionCwd,
+      });
     }
-    const results = [];
-    for (const c of commands) {
-      const cmd = typeof c === "string" ? c : c && c.cmd;
-      if (!cmd) continue;
-      const cdTo = parseCd(cmd);
-      if (cdTo) {
-        sessionCwd = resolveCwd(cdTo);
-        results.push({ cmd, cwd: sessionCwd, code: 0, stdout: "cwd=" + sessionCwd, stderr: "", mode: "full" });
-        continue;
-      }
-      const extra = typeof c === "object" && c.cwd ? resolveCwd(c.cwd) : sessionCwd;
-      results.push(await runCommand(String(cmd), extra));
-    }
-    const blob = lib.formatAttachment(results);
-    res.json({
-      written,
-      results,
-      blob,
-      chars: blob.length,
-      estTokens: Math.ceil(blob.length / 4),
-      warn: blob.length > 2500,
-      cwd: sessionCwd,
-    });
+    const extra = req.body && req.body.cwd ? resolveCwd(req.body.cwd) : sessionCwd;
+    const result = await runCommand(cmd, extra, stepId);
+    res.json({ result, cwd: sessionCwd, warn: (result.stdout || "").length > 2500 });
   } catch (err) {
     res.status(400).json({ error: String(err.message || err) });
   }
 });
 
-app.post("/api/compress", async (req, res) => {
+app.post("/api/emit", async (req, res) => {
   try {
-    const b = req.body || {};
-    let content = b.content;
-    let label = b.label || "snippet";
-    if (!content && b.path) {
-      content = fs.readFileSync(lib.safeRelPath(b.path, WORKSPACE), "utf8");
-      label = "file:" + b.path;
+    const step = req.body && req.body.step;
+    if (!step) return res.status(400).json({ error: "no step" });
+    const context = loadContext();
+    const simple = lib.heuristicEmit(step, context);
+    if (simple) return res.json({ emit: simple });
+    try {
+      const raw = await ollamaText(
+        lib.SYSTEM_EMIT,
+        [
+          "Context:\n" + (context || "(empty)"),
+          `Step ${step.id}: ${step.do}`,
+          "Need: " + (step.need || "(none)"),
+          "Expect: " + step.expect,
+        ].join("\n\n"),
+        200
+      );
+      return res.json({ emit: lib.parseEmit(raw) });
+    } catch (_) {
+      return res.json({ emit: { cmd: null, ask: step.need || step.do } });
     }
-    const packed = await compress({ content, instruction: b.instruction || b.why, label });
-    res.json(packed);
-  } catch (err) {
-    res.status(400).json({ error: String(err.message || err) });
-  }
-});
-
-app.post("/api/summarize-plan", async (req, res) => {
-  try {
-    const blob = String((req.body && req.body.content) || "");
-    const goal = String((req.body && req.body.goal) || "keep names that matter for the next question");
-    const raw = await ollamaText(
-      'JSON only. {"instruction":"which names from this listing to keep. Never mention gzip."}',
-      "Goal:\n" + goal + "\n\nOutput:\n" + blob.slice(0, 4000),
-      100
-    );
-    const parsed = lib.extractJson(raw);
-    res.json({ instruction: String(parsed.instruction || parsed.display || raw).trim() });
   } catch (err) {
     res.status(500).json({ error: String(err.message || err) });
   }
 });
 
-app.post("/api/prompt-stats", (req, res) => {
-  const text = String((req.body && req.body.text) || "");
-  const lastResults = Array.isArray(req.body.lastResults) ? req.body.lastResults : [];
-  const stats = lib.estimatePrompt({
-    system: lib.SYSTEM,
-    context: contextText(loadContext()),
-    attachment: lib.formatAttachment(lastResults),
-    user: text,
-    numCtx: NUM_CTX,
-  });
-  res.json(stats);
+app.post("/api/replan", async (req, res) => {
+  try {
+    const plan = req.body.plan;
+    const startOver = !!req.body.startOver;
+    const why = String(req.body.why || "checkpoint failed");
+    const context = loadContext();
+    if (startOver) {
+      ledger = lib.rollbackAfter(ledger, null);
+      lastGoodStep = null;
+    } else {
+      ledger = lib.rollbackAfter(ledger, lastGoodStep);
+    }
+    const heuristic = lib.heuristicPlan((plan && plan.goal) || context);
+    if (startOver && heuristic) {
+      return res.json({ display: "Starting over from the goal.", plan: heuristic });
+    }
+    try {
+      const done = (plan.steps || []).filter((s) => s.status === "ok").map((s) => s.id + " " + s.do);
+      const raw = await ollamaText(
+        lib.SYSTEM_REPLAN,
+        [
+          "Context:\n" + (context || "(empty)"),
+          "Goal: " + (plan.goal || ""),
+          "Failed because: " + why,
+          "Already done: " + (done.join("; ") || "none"),
+        ].join("\n\n"),
+        400
+      );
+      const parsed = lib.parsePlan(raw, plan.goal);
+      const kept = startOver ? [] : (plan.steps || []).filter((s) => s.status === "ok");
+      const ids = new Set(kept.map((s) => s.id));
+      const added = parsed.steps.filter((s) => !ids.has(s.id));
+      const next = { goal: plan.goal, steps: kept.concat(added), cursor: kept.length };
+      return res.json({ display: String(lib.extractJson(raw).display || "Revised remaining steps."), plan: next });
+    } catch (_) {
+      const rest = (plan.steps || []).filter((s) => s.status !== "ok").map((s) => ({ ...s, status: "todo" }));
+      return res.json({ display: "Retry remaining steps.", plan: { ...plan, steps: rest, cursor: 0 } });
+    }
+  } catch (err) {
+    res.status(500).json({ error: String(err.message || err) });
+  }
 });
 
-app.post("/api/context/set", (req, res) => {
-  const incoming = Array.isArray(req.body && req.body.items) ? req.body.items : null;
-  if (!incoming) return res.status(400).json({ error: "items array required" });
-  const ctx = { nextId: 1, items: [] };
-  for (const row of incoming) {
-    const text = String((row && row.text) || "").trim();
-    if (!text) continue;
-    ctx.items.push({
-      id: ctx.nextId++,
-      text: lib.clip(text, 8000),
-      origin: row.origin === "A" ? "A" : "U",
-    });
+app.post("/api/check", async (req, res) => {
+  try {
+    const plan = req.body.plan;
+    const result = req.body.result;
+    const step = lib.currentStep(plan);
+    if (!step) return res.status(400).json({ error: "no current step" });
+    const context = loadContext();
+    let check = lib.heuristicCheck(step, result, context);
+    try {
+      const raw = await ollamaText(
+        lib.SYSTEM_CHECK,
+        [
+          "Context:\n" + (context || "(empty)"),
+          `Step ${step.id}: ${step.do}`,
+          "Expect: " + step.expect,
+          `Command: ${result.cmd} exit ${result.code}`,
+          "Output:\n" + lib.clip(result.stdout || "", lib.overflow(context, result.stdout || "") ? 400 : 2500),
+        ].join("\n\n"),
+        280
+      );
+      check = { ...check, ...lib.parseCheck(raw, check.context) };
+    } catch (_) {}
+    check.context = lib.finalizeRewrite(context, check.context, "");
+    if (lib.overflow(context, result.stdout || "") && check.attach === "full") check.attach = "summary";
+    const snippet = lib.applyAttach(check.attach, result.cmd, result);
+    let nextPlan = lib.mark(plan, step.id, check.ok ? "ok" : check.ask ? "ask" : "fail");
+    if (check.startOver) {
+      ledger = lib.rollbackAfter(ledger, null);
+      lastGoodStep = null;
+    } else if (check.replan && !check.ok) {
+      ledger = lib.rollbackAfter(ledger, lastGoodStep);
+    } else if (check.ok) {
+      lastGoodStep = step.id;
+      nextPlan = lib.advance(nextPlan, check.next);
+    }
+    saveContext(check.context);
+    res.json({ check, plan: nextPlan, snippet, cwd: sessionCwd });
+  } catch (err) {
+    res.status(500).json({ error: String(err.message || err) });
   }
-  saveContext(ctx);
-  res.json({ context: ctx.items });
 });
-app.post("/api/context/add", (req, res) => {
-  const text = String((req.body && req.body.text) || "").trim();
-  if (!text) return res.status(400).json({ error: "empty text" });
-  const ctx = loadContext();
-  ctx.items.push({
-    id: ctx.nextId++,
-    text: lib.clip(text, 8000),
-    origin: req.body.origin === "A" ? "A" : "U",
-  });
-  trimContext(ctx);
-  saveContext(ctx);
-  res.json({ context: ctx.items });
-});
-app.post("/api/context/delete", (req, res) => {
-  const id = Number(req.body && req.body.id);
-  const ctx = loadContext();
-  ctx.items = ctx.items.filter((i) => i.id !== id);
-  saveContext(ctx);
-  res.json({ context: ctx.items });
-});
-app.post("/api/ops/resolve", (req, res) => {
-  const allow = !!(req.body && req.body.allow);
-  const ops = Array.isArray(req.body && req.body.ops) ? req.body.ops : [];
-  const ctx = loadContext();
-  if (allow) lib.applyOps(ctx, ops, { protectUser: false });
-  trimContext(ctx);
-  saveContext(ctx);
-  res.json({ context: ctx.items, applied: allow });
-});
+
 app.post("/api/context/clear", (_req, res) => {
-  saveContext({ nextId: 1, items: [] });
-  res.json({ context: [] });
+  saveContext("");
+  ledger = [];
+  lastGoodStep = null;
+  res.json({ context: "" });
 });
 
 if (require.main === module) {

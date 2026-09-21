@@ -1,16 +1,16 @@
 # local-loop
 
-Local web UI + Node loop for a small Ollama model (Qwen2.5-Coder 3B on a 4GB Pascal GPU).
+Local web UI + Node loop for a small Ollama model (Qwen2.5-Coder 3B).
 
-Approve before any shell or file write. Notes live in the right pane.
+Every prompt is classified, then run in one mode:
 
-After a command runs, its output is **attached to the next Send** with metadata (`cmd`, `cwd`, `exit`, `mode`). It is not a fake user message.
+**Direct (A)** — answer, at most one command. Nothing is stored. Press **Add** to rewrite the whole working context from this turn (optional: include command output). If there is still no `KEEP GOAL`, context is emptied.
 
-- **Use full** — send the raw output (a warning shows if it is large for the 8k context)
-- **Summarize** — the model first writes a keep-instruction, then compresses; you can inspect both before sending
-- **Drop** — do not send the output on the next turn
+**Plan (B)** — a small task tree. Each step: execute → checkpoint (does output match expect? is context overflowing?) → next, replan, or start over with file rollback. A step with no command can emit one from context or ask you. Generated files written during the plan are snapshotted and rolled back on replan / start over.
 
-The composer shows estimated prompt tokens vs the model context (`~tokens / 8192`).
+Context is one visible document. Flag durable lines `KEEP` / `KEEP GOAL`. Drop something by asking, not by clicking.
+
+The model never receives a listing of this repo. Prefix `plan:` or `do:` to force a mode, or use the Direct / Plan toggle.
 
 ```bash
 git clone https://github.com/Rubizon/local-loop.git
@@ -23,4 +23,8 @@ OLLAMA_MODEL=qwen2.5-coder:3b-8k npm start
 
 Open http://127.0.0.1:3847
 
-The model prompt contains only: system instructions, notes you saved, attached command output, and your message. It does not receive a listing of this repo.
+Try:
+
+- `go to /tmp and list files` — Direct, one command, nothing stored until Add
+- `list /tmp then write a short report of the names` — Plan
+- `look in my chat logs for all my angry remarks, collect them and put them into an excel and zip the excel` — Plan with emit + zip

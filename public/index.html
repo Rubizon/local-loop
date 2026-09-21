@@ -11,51 +11,34 @@
     <div class="brand">
       <strong>local-loop</strong>
       <span class="chip" id="chipModel">model</span>
-      <span class="chip" id="chipCwd" title="session cwd">cwd</span>
+      <span class="chip" id="chipCwd">cwd</span>
+    </div>
+    <div class="modes" id="modes">
+      <button type="button" data-mode="A" class="on">Direct</button>
+      <button type="button" data-mode="B">Plan</button>
     </div>
     <span id="status" class="status"></span>
     <div class="header-actions">
       <button type="button" id="test">Self-test</button>
-      <button type="button" id="clear">Clear notes</button>
+      <button type="button" id="clear">Clear</button>
     </div>
   </header>
-
   <main>
     <section id="thread">
       <div id="chat"></div>
       <footer>
-        <div id="attach" class="attach off">
-          <span class="attach-dot"></span>
-          <span id="attachText">No output attached to next send</span>
-        </div>
-        <textarea id="input" placeholder="Ask something. Approve before any command or write."></textarea>
+        <textarea id="input" placeholder="Direct: one answer, maybe one command. Plan: a task tree. Nothing is stored until Add."></textarea>
         <div class="composer-bar">
-          <span id="budget" class="meter">prompt ~0 / 8192</span>
-          <span class="hint">Enter send · Shift+Enter newline</span>
+          <span id="budget" class="meter">~0 / 8192</span>
+          <span class="hint" id="modeHint">Direct · Enter send</span>
           <button class="ok" type="button" id="send">Send</button>
         </div>
       </footer>
     </section>
-
     <aside>
-      <section class="rail-block">
-        <h2>Notes</h2>
-        <p class="hint">Sent every turn. U = you locked. A = model. Delete anytime. Model needs OK to change U.</p>
-        <div class="rowbtns">
-          <button type="button" id="ctxAdd">Add note</button>
-        </div>
-        <ol id="ctx"></ol>
-      </section>
-      <section class="rail-block">
-        <h2>Next-send attachment</h2>
-        <p class="hint">Command output is appended to the next prompt with cmd/cwd/exit metadata. It stays until you drop it.</p>
-        <p id="attachDetail" class="attach-detail">None</p>
-        <div class="rowbtns">
-          <button type="button" id="attachFull">Use full</button>
-          <button type="button" id="attachSum">Summarize</button>
-          <button type="button" id="attachDrop">Drop</button>
-        </div>
-      </section>
+      <h2>Working context</h2>
+      <p class="hint">Always visible. Rewritten in full on Add. Drop a line by asking. KEEP survives.</p>
+      <pre id="ctx">(empty)</pre>
     </aside>
   </main>
   <script src="/app.js"></script>
