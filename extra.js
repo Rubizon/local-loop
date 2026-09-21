@@ -78,7 +78,7 @@ app.post("/api/summarize-plan", async (req, res) => {
     const blob = String((req.body && req.body.content) || "");
     const goal = String((req.body && req.body.goal) || "next coding step");
     const raw = await ollamaText(
-      "JSON only. {\"instruction\":\"one sentence: what to keep when compressing this command output\"}",
+      "JSON only. {\"instruction\":\"which names from this listing to keep. Never mention gzip or zip.\"}",
       "Goal:\n" + goal + "\n\nOutput:\n" + blob.slice(0, 4000),
       100
     );
