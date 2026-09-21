@@ -19,7 +19,6 @@
       <button type="button" id="clear">Clear notes</button>
     </div>
   </header>
-
   <main>
     <section id="thread">
       <div id="chat"></div>
@@ -36,15 +35,12 @@
         </div>
       </footer>
     </section>
-
     <aside>
       <section class="rail-block">
         <h2>Notes</h2>
-        <p class="hint">Short facts for the next prompt. Unlock to edit by hand.</p>
+        <p class="hint">Sent every turn. U = you locked. A = model. Delete anytime. Model needs OK to change U.</p>
         <div class="rowbtns">
-          <button type="button" id="ctxUnlock">Unlock</button>
-          <button type="button" id="ctxAdd" disabled>Add</button>
-          <button type="button" id="ctxSave" class="ok" disabled>Save</button>
+          <button type="button" id="ctxAdd">Add note</button>
         </div>
         <ol id="ctx"></ol>
       </section>
