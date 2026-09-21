@@ -1,0 +1,15 @@
+{
+  "name": "local-loop",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Local web UI + Node agent loop for Ollama with approve-before-run",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node selftest.js --unit-only",
+    "test:model": "node selftest.js --require-model"
+  },
+  "dependencies": {
+    "express": "^4.21.2"
+  }
+}
