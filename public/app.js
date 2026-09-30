@@ -86,9 +86,46 @@ function hideSpinner() {
   clearSpinners();
 }
 
+var llmHold = 0;
+var llmAhead = 0;
+var llmTail = Promise.resolve();
+var llmKeys = {};
+
+function enqueueLlm(key, label, fn) {
+  if (key && llmKeys[key]) return llmKeys[key];
+  if (llmAhead > 0) showSpinner("Waiting");
+  llmAhead++;
+  var job = llmTail.then(function () {
+    llmHold++;
+    setBusy(true, label);
+    return Promise.resolve().then(fn);
+  });
+  var settled = job.then(function (value) {
+    llmHold = Math.max(0, llmHold - 1);
+    llmAhead = Math.max(0, llmAhead - 1);
+    if (llmHold === 0) setBusy(false);
+    return value;
+  }, function (err) {
+    llmHold = Math.max(0, llmHold - 1);
+    llmAhead = Math.max(0, llmAhead - 1);
+    if (llmHold === 0) setBusy(false);
+    throw err;
+  });
+  llmTail = settled.then(function () {}, function () {});
+  var tracked = settled.then(function (value) {
+    if (key) delete llmKeys[key];
+    return value;
+  }, function (err) {
+    if (key) delete llmKeys[key];
+    throw err;
+  });
+  if (key) llmKeys[key] = tracked;
+  return tracked;
+}
+
 function setBusy(on, label) {
+  if (!on && llmHold > 0) return;
   busy = on;
-  if (sendBtn) sendBtn.disabled = on;
   if (on) showSpinner(label || "Working");
   else hideSpinner();
 }
@@ -321,12 +358,16 @@ function dress(box, raw) {
     }
     status.hidden = false;
     toggle.disabled = true;
-    fetch("/api/markup", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text: text }),
+    var wait = status.lastChild;
+    if (wait) wait.textContent = llmAhead > 0 ? " Waiting" : " Formatting";
+    enqueueLlm("markup:" + text, "Formatting", function () {
+      if (wait) wait.textContent = " Formatting";
+      return fetch("/api/markup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: text }),
+      }).then(function (r) { return r.json(); });
     })
-      .then(function (r) { return r.json(); })
       .then(function (data) {
         var modelText = String((data && data.pretty) || text);
         var pretty = window.LoopFormat && LoopFormat.formatAnswer ? LoopFormat.formatAnswer(modelText) : modelText;
@@ -566,14 +607,14 @@ function renderPending(host) {
       label: "Approve",
       ok: true,
       fn: async function () {
-        try {
-          await applyOne(pendingA.cmd, null, host, function (result) {
+        enqueueLlm("approve:" + (pendingA && pendingA.cmd), "Running", function () {
+          return applyOne(pendingA.cmd, null, host, function (result) {
             pendingA.result = result;
             return rememberOutput();
           });
-        } catch (e) {
+        }).catch(function (e) {
           addMsg("err", e.message);
-        }
+        });
       },
     },
     {
@@ -664,7 +705,7 @@ function renderPlan(host) {
       label: "Approve the scan",
       ok: true,
       fn: function () {
-        runScan(host);
+        enqueueLlm("scan", "Reading files", function () { return runScan(host); });
       },
     });
     setHold("This reads every listed file. State shows which file is open.");
@@ -681,7 +722,7 @@ function renderPlan(host) {
       label: "Approve",
       ok: true,
       fn: function () {
-        runPlanStep(host);
+        enqueueLlm("step:" + (step && step.id), "Working", function () { return runPlanStep(host); });
       },
     });
     setHold("");
@@ -690,7 +731,7 @@ function renderPlan(host) {
       label: "Show the command",
       ok: true,
       fn: function () {
-        runPlanStep(host);
+        enqueueLlm("step:" + (step && step.id), "Working", function () { return runPlanStep(host); });
       },
     });
     setHold(actionTitle(step) + " needs a command. Show it, then approve it.");
@@ -710,13 +751,13 @@ function renderPlan(host) {
     items.push({
       label: "Replan remaining",
       fn: function () {
-        doReplan(false, host);
+        enqueueLlm("replan", "Replan", function () { return doReplan(false, host); });
       },
     });
     items.push({
       label: "Start over",
       fn: function () {
-        doReplan(true, host);
+        enqueueLlm("replan:over", "Start over", function () { return doReplan(true, host); });
       },
     });
   }
@@ -733,7 +774,9 @@ function renderPlan(host) {
         fn: async function () {
           const text = ta.value.trim();
           if (!text) return;
-          await checkpoint({ cmd: "(user)", code: 0, stdout: text }, host);
+          enqueueLlm("answer:" + text, "Working through the output", function () {
+            return checkpoint({ cmd: "(user)", code: 0, stdout: text }, host);
+          });
         },
       },
     ]);
@@ -960,7 +1003,9 @@ async function turn() {
   const typed = input.value.trim();
   const paths = attached.map(function (f) { return f.path; });
   const text = [typed, paths.length ? "Files:\n" + paths.join("\n") : ""].filter(Boolean).join("\n\n");
-  if (!text || busy) return;
+  if (!text) return;
+  var turnKey = "turn:" + text;
+  if (llmKeys[turnKey]) return;
   retireActions();
   setHold("");
   input.value = "";
@@ -968,7 +1013,7 @@ async function turn() {
   renderFiles();
   fitInput();
   addMsg("user", text);
-  setBusy(true, "Thinking");
+  return enqueueLlm(turnKey, "Thinking", async function () {
   const ac = new AbortController();
   const timer = setTimeout(function () {
     ac.abort();
@@ -1013,6 +1058,7 @@ async function turn() {
     clearTimeout(timer);
     setBusy(false);
   }
+  });
 }
 
 if (sendBtn) sendBtn.onclick = turn;
@@ -1138,11 +1184,10 @@ function downloadText(filename, text) {
 var testBtn = document.getElementById("test");
 if (testBtn)
   testBtn.onclick = async function () {
+    if (llmKeys["model-test"]) return;
     const box = addMsg("bot", "Testing the model…");
-    busy = true;
-    if (sendBtn) sendBtn.disabled = true;
+    return enqueueLlm("model-test", "Testing the model", async function () {
     testBtn.disabled = true;
-    clearSpinners();
     const probes = [];
     try {
       const listed = await fetch("/api/model-test").then(function (r) { return r.json(); });
@@ -1179,11 +1224,9 @@ if (testBtn)
     } catch (e) {
       box.body.textContent = e.message;
     } finally {
-      busy = false;
-      if (sendBtn) sendBtn.disabled = false;
       testBtn.disabled = false;
-      clearSpinners();
     }
+    });
   };
 
 var exportBtn = document.getElementById("export");

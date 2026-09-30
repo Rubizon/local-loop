@@ -148,7 +148,14 @@ async function modelJudge(task, step, evidence) {
   return lib.parseVerdict(raw);
 }
 
+let llmTail = Promise.resolve();
 async function ollamaText(system, user, numPredict = 280) {
+  const run = llmTail.then(function () { return ollamaOnce(system, user, numPredict); });
+  llmTail = run.then(function () {}, function () {});
+  return run;
+}
+
+async function ollamaOnce(system, user, numPredict = 280) {
   const res = await fetch(`${OLLAMA_HOST}/api/chat`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
