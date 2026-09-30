@@ -173,10 +173,16 @@ function parsePlan(raw, fallbackGoal) {
   };
 }
 
-function parseCheck(raw, fallbackContext) {
+function asOk(value) {
+  if (value === true || value === 1 || value === "1" || value === "true" || value === "yes" || value === "ok") return true;
+  if (value === false || value === 0 || value === "0" || value === "false" || value === "no") return false;
+  return null;
+}
+  function parseCheck(raw, fallbackContext) {
   const p = extractJson(raw);
+  const ok = asOk(p.ok);
   return {
-    ok: p.ok === true,
+    ok: ok === null ? false : ok,
     why: String(p.why || p.display || ""),
     ask: p.ask == null || p.ask === "" ? null : String(p.ask),
     replan: p.replan === true,
@@ -254,6 +260,16 @@ function angryPlan() {
 function heuristicPlan(text) {
   const t = String(text || "").trim();
   if (/(angry|furious|hate|pissed)/i.test(t) && /(chat|log)/i.test(t) && /(excel|csv|xlsx|zip)/i.test(t)) return angryPlan();
+  if (/\/tmp/.test(t) && /pdf/i.test(t)) {
+    return {
+      goal: "KEEP GOAL: list /tmp, then write a one-page PDF summary of those names",
+      cursor: 0,
+      steps: [
+        { id: "1", do: "List /tmp", need: "", expect: "names from /tmp", attach: "summary", cmd: "ls -la /tmp", status: "todo" },
+        { id: "2", do: "Write a PDF summary of those names", need: "FACT names from the listing", expect: "pdf file exists", attach: "paths", cmd: null, status: "todo" },
+      ],
+    };
+  }
   if (/\/tmp/.test(t) && /\b(then|report|csv|zip|collect)\b/i.test(t)) {
     return {
       goal: "KEEP GOAL: inspect /tmp and keep a short name list",
@@ -285,7 +301,12 @@ function heuristicEmit(step, context) {
     const body = remarks.slice(0, 8).map((t) => t.replace(/"/g, "")).join(" | ");
     return { cmd: "echo \"" + clip(body, 400) + "\" > /tmp/angry.csv", ask: null };
   }
-  if (/\bzip\b/i.test(blob)) return { cmd: "zip /tmp/angry.zip /tmp/angry.csv", ask: null };
+  if (/\bzip\b/i.test(blob) && !/pdf/i.test(blob)) return { cmd: "zip /tmp/angry.zip /tmp/angry.csv", ask: null };
+  if (/pdf/i.test(blob)) {
+    const fact = String(context || "").split("\n").find((l) => /^FACT:/.test(l));
+    if (!fact) return { cmd: null, ask: "No names in state yet. List the directory first." };
+    return { cmd: pdfCommand(fact.replace(/^FACT:\s*/, "")), ask: null };
+  }
   if (step && step.need && /you|user|ask|where|which|path of/i.test(step.need)) return { cmd: null, ask: step.need };
   return null;
 }
@@ -311,6 +332,57 @@ function heuristicCheck(step, result, context) {
   };
 }
 
+function stepState(plan, step, result, ok) {
+  const goal = String((plan && plan.goal) || "KEEP GOAL: (untitled)");
+  const lines = [/^KEEP\s+GOAL:/i.test(goal) ? goal : "KEEP GOAL: " + goal];
+  const steps = (plan && plan.steps) || [];
+  const idx = steps.findIndex((s) => s.id === step.id);
+  const upcoming = steps.slice(Math.max(0, idx) + (ok ? 1 : 0)).filter((s) => s.status !== "ok" && s.id !== (ok ? step.id : ""));
+  const nxt = upcoming[0];
+  if (ok && nxt) lines.push("NEXT: " + nxt.do + (nxt.need ? " — use " + nxt.need : " — use the fact below"));
+  else if (!ok) lines.push("NEXT: retry " + step.do + " — " + (step.expect || "the command must succeed"));
+  else lines.push("NEXT: none. The plan is finished.");
+  const fact = summarizeOutput((result && result.cmd) || "", (result && result.stdout) || "");
+  if (fact) lines.push("FACT: " + fact);
+  const done = steps.filter((s) => s.status === "ok" || (ok && s.id === step.id)).map((s) => s.do);
+  if (done.length) lines.push("DONE: " + done.join("; "));
+  return clipContext(lines.join("\n"));
+}
+
+function pdfBytes(text) {
+  const lines = String(text || "summary").replace(/[^\x09\x0a\x0d\x20-\x7e]/g, " ").split("\n").slice(0, 28);
+  const content = ["BT", "/F1 12 Tf"];
+  lines.forEach((line, i) => {
+    const esc = line.replace(/\\/g, "\\\\").replace(/\(/g, "\\(").replace(/\)/g, "\\)");
+    content.push("1 0 0 1 50 " + (740 - i * 16) + " Tm (" + esc + ") Tj");
+  });
+  content.push("ET");
+  const stream = content.join("\n");
+  const objs = [
+    "1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n",
+    "2 0 obj<</Type/Pages/Count 1/Kids[3 0 R]>>endobj\n",
+    "3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 612 792]/Contents 4 0 R/Resources<</Font<</F1 5 0 R>>>>>>endobj\n",
+    "4 0 obj<</Length " + stream.length + ">>stream\n" + stream + "\nendstream\nendobj\n",
+    "5 0 obj<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>endobj\n",
+  ];
+  let pdf = "%PDF-1.4\n";
+  const offs = [0];
+  for (const obj of objs) {
+    offs.push(pdf.length);
+    pdf += obj;
+  }
+  const xref = pdf.length;
+  pdf += "xref\n0 6\n0000000000 65535 f \n";
+  for (let i = 1; i < offs.length; i++) pdf += String(offs[i]).padStart(10, "0") + " 00000 n \n";
+  pdf += "trailer<</Size 6/Root 1 0 R>>\nstartxref\n" + xref + "\n%%EOF";
+  return Buffer.from(pdf);
+}
+
+function pdfCommand(text) {
+  const b64 = pdfBytes(text).toString("base64");
+  return "python3 -c \"import base64; open('/tmp/tmp-summary.pdf','wb').write(base64.b64decode('" + b64 + "'))\"";
+}
+
 function shortListing(stdout) {
   const names = listingNames(stdout);
   if (!names.length) return "";
@@ -323,6 +395,7 @@ function shortListing(stdout) {
 function finishReport(plan, result) {
   const step = currentStep(plan);
   if (!step || step.status === "ok" || step.cmd) return null;
+  if (/pdf|write /i.test(String(step.do || ""))) return null;
   if (!/report|short name|summary/i.test(String(step.do || "") + " " + String(step.expect || ""))) return null;
   const text = shortListing((result && result.stdout) || "");
   if (!text) return null;
@@ -419,6 +492,13 @@ function runUnitTests() {
   check("deny sudo", (() => { try { assertSafeCmd("sudo ls"); return false; } catch (_) { return true; } })());
   const p = heuristicPlan("list /tmp then write a report");
   check("heuristic plan", p && p.steps.length === 2);
+  const pdfPlan = heuristicPlan("go to /tmp and list all files then create a pdf with a summary of what is there");
+  check("pdf plan", pdfPlan && /PDF/.test(pdfPlan.goal) && pdfPlan.steps[1].cmd == null && /PDF/.test(pdfPlan.steps[1].do));
+  const stated = stepState(pdfPlan, pdfPlan.steps[0], { cmd: "ls -la /tmp", code: 0, stdout: "alpha\nbeta\n" }, true);
+  check("state keeps next", /KEEP GOAL: list \/tmp/.test(stated) && /NEXT: Write a PDF/.test(stated) && /FACT:/.test(stated));
+  check("ok string is success", parseCheck('{"ok":"ok","why":"ok"}', "").ok === true);
+  const emitted = heuristicEmit(pdfPlan.steps[1], stated);
+  check("emit pdf", emitted && /tmp-summary\.pdf/.test(emitted.cmd || "") && pdfBytes("names").slice(0, 5).toString() === "%PDF-");
   const listed = advance(mark(p, "1", "ok"), "next");
   const finished = finishReport(listed, { cmd: "ls -la /tmp", code: 0, stdout: "alpha\nbeta\n" });
   check("report finishes", finished && /alpha/.test(finished.text) && finished.plan.steps[1].status === "ok");
@@ -459,6 +539,9 @@ module.exports = {
   summarizeOutput,
   shortListing,
   finishReport,
+  stepState,
+  pdfBytes,
+  pdfCommand,
   overflow,
   applyAttach,
   heuristicDirect,

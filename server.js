@@ -299,25 +299,33 @@ app.post("/api/check", async (req, res) => {
     if (!step) return res.status(400).json({ error: "no current step" });
     const context = loadContext();
     let check = lib.heuristicCheck(step, result, context);
-    try {
-      const raw = await ollamaText(
-        lib.SYSTEM_CHECK,
-        [
-          "Context:\n" + (context || "(empty)"),
-          `Step ${step.id}: ${step.do}`,
-          "Expect: " + step.expect,
-          `Command: ${result.cmd} exit ${result.code}`,
-          "Output:\n" + lib.clip(result.stdout || "", lib.overflow(context, result.stdout || "") ? 400 : 2500),
-        ].join("\n\n"),
-        280
-      );
-      check = { ...check, ...lib.parseCheck(raw, check.context) };
-    } catch (_) {}
+    const produced = result.code === 0 && String(result.stdout || "").trim();
+    if (!check.ok || !produced) {
+      try {
+        const raw = await ollamaText(
+          lib.SYSTEM_CHECK,
+          [
+            "Context:\n" + (context || "(empty)"),
+            "Goal: " + ((plan && plan.goal) || ""),
+            "Remaining: " + (plan.steps || []).filter((s) => s.status !== "ok" && s.id !== step.id).map((s) => s.do).join("; "),
+            `Step ${step.id}: ${step.do}`,
+            "Expect: " + step.expect,
+            `Command: ${result.cmd} exit ${result.code}`,
+            "Output:\n" + lib.clip(result.stdout || "", lib.overflow(context, result.stdout || "") ? 400 : 2500),
+          ].join("\n\n"),
+          280
+        );
+        const model = lib.parseCheck(raw, check.context);
+        if (!(check.ok && produced && model.ok === false)) {
+          check = { ...check, ...model, context: check.context };
+        }
+      } catch (_) {}
+    }
     if (check.ok && !check.ask) {
       const more = (plan.steps || []).some((s) => s.id !== step.id && s.status !== "ok");
       if (more && (check.next === "done" || check.next === step.id)) check.next = "next";
     }
-    check.context = lib.finalizeRewrite(context, check.context, "");
+    check.context = lib.stepState(plan, step, result, check.ok);
     if (lib.overflow(context, result.stdout || "") && check.attach === "full") check.attach = "summary";
     const snippet = lib.applyAttach(check.attach, result.cmd, result);
     let nextPlan = lib.mark(plan, step.id, check.ok ? "ok" : check.ask ? "ask" : "fail");

@@ -278,18 +278,21 @@ function renderPlan(host) {
   const step = plan.steps && plan.steps[plan.cursor];
   const finished = plan.steps && plan.steps.length && plan.steps.every(function (s) { return s.status === "ok"; });
   const reportStep = step && !step.cmd && /report|short name|summary/i.test((step.do || "") + " " + (step.expect || ""));
+  const pdfStep = step && /pdf/i.test(step.do || "");
   const items = [];
   if (!finished && step) {
     items.push({
-      label: reportStep ? "Write the report" : step.cmd ? "Run " + step.cmd.split("\n")[0].slice(0, 42) : "Prepare this step",
+      label: pdfStep ? (step.cmd ? "Write the PDF" : "Prepare the PDF") : reportStep ? "Write the report" : step.cmd ? "Run " + step.cmd.split("\n")[0].slice(0, 42) : "Prepare this step",
       ok: true,
       fn: function () {
         runPlanStep(host);
       },
     });
-    setHold(reportStep
-      ? "Waiting for you. Next writes the short report in this thread. Press “Write the report”."
-      : "Waiting for you. Next: " + step.do + ".");
+    setHold(pdfStep
+      ? "Waiting for you. Next writes the PDF from the names already in state."
+      : reportStep
+        ? "Waiting for you. Next writes the short report in this thread."
+        : "Waiting for you. Next: " + step.do + (step.need ? ". Then use " + step.need + "." : "."));
   } else {
     setHold(finished ? "Done. Nothing else is waiting." : "");
   }
@@ -383,7 +386,8 @@ async function checkpoint(result, host) {
     check = d.check;
     renderContext(d.check.context);
     if (d.report) addMsg("bot", d.report);
-    else if (d.snippet) addMsg("bot", "Kept from this step:\n" + d.snippet);
+    const nextLine = String((d.check && d.check.context) || "").split("\n").find((l) => /^NEXT:/.test(l));
+    addMsg("bot", nextLine || (d.check && d.check.ok ? "Step finished." : "Step did not pass."));
     renderPlan(host);
   } finally {
     setBusy(false);
