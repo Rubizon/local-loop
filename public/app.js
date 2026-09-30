@@ -414,6 +414,18 @@ async function checkpoint(result, host) {
   const timer = setTimeout(function () {
     ac.abort();
   }, 240000);
+  let watch = true;
+  const poll = setInterval(function () {
+    fetch("/api/state")
+      .then(function (r) { return r.json(); })
+      .then(function (s) {
+        if (!watch || !s) return;
+        renderContext(s.context || "");
+        const next = String(s.context || "").split("\n").find(function (l) { return /^NEXT:/.test(l); });
+        if (next) setBusy(true, next.replace(/^NEXT:\s*/, ""));
+      })
+      .catch(function () {});
+  }, 800);
   try {
     const r = await fetch("/api/check", {
       method: "POST",
@@ -444,6 +456,8 @@ async function checkpoint(result, host) {
     renderPlan(host);
   } finally {
     clearTimeout(timer);
+    watch = false;
+    clearInterval(poll);
     setBusy(false);
   }
 }

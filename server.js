@@ -120,12 +120,13 @@ function programText(cmd, stdout, stderr) {
   return text;
 }
 
-async function reduceReport(task, text, depth) {
+async function reduceReport(task, text, depth, onPart) {
   const body = String(text || "");
   if (!body.trim()) return "";
   const budget = lib.contextCharBudget();
   const ask = lib.clip(task, 240);
   if (body.length <= budget || depth > 3) {
+    if (onPart) onPart(1, 1, []);
     const parsed = lib.extractJson(
       await ollamaText(lib.SYSTEM_SAY, "Task: " + ask + "\n\nOutput:\n" + lib.clip(body, budget), 280)
     );
@@ -133,6 +134,7 @@ async function reduceReport(task, text, depth) {
   }
   const chunks = lib.chunkText(body, budget);
   const notes = [];
+  if (onPart) onPart(1, chunks.length, notes);
   for (let i = 0; i < chunks.length; i++) {
     try {
       const parsed = lib.extractJson(
@@ -145,9 +147,10 @@ async function reduceReport(task, text, depth) {
       const note = typeof parsed.note === "string" ? parsed.note.trim() : "";
       if (note && !/\b(KEEP|FACT|NEXT)\b/.test(note)) notes.push(note);
     } catch (_) {}
+    if (onPart) onPart(i + 1, chunks.length, notes);
   }
   if (!notes.length) return "";
-  return reduceReport(task, notes.map((n, i) => i + 1 + ". " + n).join("\n"), (depth || 0) + 1);
+  return reduceReport(task, notes.map((n, i) => i + 1 + ". " + n).join("\n"), (depth || 0) + 1, onPart);
 }
 
 async function ollamaText(system, user, numPredict = 280) {
@@ -487,7 +490,10 @@ app.post("/api/check", async (req, res) => {
     const listing = /^ls\b/.test(String((result && result.cmd) || "").trim());
     if (check.ok && !listing && ((plan && plan.fromModel) || overContext)) {
       try {
-        reportText = await reduceReport(plan.ask || plan.goal || (step && step.do) || "", produced, 0);
+        reportText = await reduceReport(plan.ask || plan.goal || (step && step.do) || "", produced, 0, function (index, total, notes) {
+          const goal = (plan && (plan.ask || plan.goal)) || (step && step.do) || "";
+          saveContext(lib.progressState(goal, index, total, notes));
+        });
       } catch (_) {
         reportText = "";
       }

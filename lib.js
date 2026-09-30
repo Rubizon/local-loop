@@ -94,6 +94,18 @@ function contextCharBudget() {
   return Math.max(2000, ((Number(NUM_CTX) || 8192) - 1000) * 3);
 }
 
+function progressState(goal, index, total, notes) {
+  const lines = [];
+  const g = String(goal || "").replace(/^KEEP GOAL:\s*/i, "").trim();
+  if (g) lines.push("KEEP GOAL: " + clip(g, 180));
+  const at = Math.max(1, Number(index) || 1);
+  const n = Math.max(at, Number(total) || 1);
+  lines.push("NEXT: reading part " + at + " of " + n);
+  const kept = (notes || []).map((x) => String(x || "").trim()).filter(Boolean).slice(-6);
+  if (kept.length) lines.push("FACT: " + clip(kept.join(" "), 700));
+  return lines.join("\n");
+}
+
 function previewOutput(text, n) {
   const s = String(text || "");
   const limit = n || 8000;
@@ -1165,6 +1177,8 @@ function runUnitTests() {
   const pieces = chunkText(big, contextCharBudget());
   check("oversized output splits", pieces.length > 1 && pieces[0].includes("START") && pieces[pieces.length - 1].includes("END"));
   check("preview keeps the tail count", /more characters$/.test(previewOutput("abcdef", 3)) && previewOutput("abcdef", 3).startsWith("abc"));
+  const live = progressState("read lib.js", 2, 5, ["constants", "functions"]);
+  check("progress state is visible", /KEEP GOAL: read lib\.js/.test(live) && /part 2 of 5/.test(live) && /FACT: constants functions/.test(live));
   check("ok string is success", parseCheck('{"ok":"ok","why":"ok"}', "").ok === true);
   const emitted = heuristicEmit(pdfPlan.steps[1], stated);
   check("emit pdf", emitted && /tmp-summary\.pdf/.test(emitted.cmd || "") && pdfBytes("names").slice(0, 5).toString() === "%PDF-");
@@ -1256,6 +1270,7 @@ module.exports = {
   SYSTEM_NOTE,
   MODEL_PROBE_USER,
   contextCharBudget,
+  progressState,
   previewOutput,
   clip,
   chunkText,
