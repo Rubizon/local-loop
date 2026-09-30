@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { Download, Play, RotateCcw } from "lucide-react";
+import { Markup, Report } from "@/components/markup";
 import { Button } from "@/components/ui/button";
+import { looksLikeMarkup } from "@/lib/loop/markup";
 import { buildPacket, heuristicReply } from "@/lib/loop/agent";
 import { deskPaths, pdfToBytes, packOutput, seedDesk } from "@/lib/loop/desk";
 import { supervise } from "@/lib/loop/proc";
@@ -13,6 +15,7 @@ import { cn } from "@/lib/utils";
 const STORE = "loop.v3";
 
 const EXAMPLES = [
+  { label: "Summarize the inbox", text: "Summarize the inbox notes" },
   { label: "Summarize inbox to PDF", text: "Read the inbox notes, summarize them, and write a PDF." },
   { label: "List the inbox", text: "List the inbox files" },
   { label: "What Friday decided", text: "What did Friday decide?" },
@@ -163,6 +166,7 @@ export function LoopApp() {
         }
         setHeadline(reply.say);
         pushTrace({ who: "loop", text: reply.say });
+        if (reply.act?.type === "ask") setAsk(reply.act.q);
         return;
       }
       const base =
@@ -551,7 +555,7 @@ export function LoopApp() {
           <section className="rounded-xl border border-border bg-elevated p-2">
             <div className="px-3 pt-3 pb-1">
               <p className="text-xs font-medium text-faint">{phaseLabel}</p>
-              {headline ? <p className="mt-2 font-display text-2xl leading-snug tracking-tight">{headline}</p> : null}
+              {headline ? <Report text={headline} /> : null}
             </div>
 
             {state.phase === "review" && state.steps.length > 0 ? (
@@ -629,7 +633,10 @@ export function LoopApp() {
                   void send(answer);
                 }}
               >
-                <p className="text-sm font-medium">{ask}</p>
+                {looksLikeMarkup(ask) ? <Markup text={ask} /> : <p className="text-sm font-medium">{ask}</p>}
+                {state.phase === "review" ? (
+                  <p className="mt-1 text-sm text-muted">This answer updates the plan.</p>
+                ) : null}
                 <div className="mt-3 flex gap-2">
                   <input
                     value={askDraft}
@@ -681,7 +688,11 @@ export function LoopApp() {
                 {trace.slice(-8).map((item, i) => (
                   <li key={`${i}-${item.who}`} className="text-sm leading-normal">
                     <span className="text-faint">{item.who === "you" ? "You" : item.who === "run" ? "Ran" : "Loop"} · </span>
-                    <span className="whitespace-pre-wrap text-muted">{item.text}</span>
+                    {item.who === "loop" && looksLikeMarkup(item.text) ? (
+                      <Markup text={item.text} />
+                    ) : (
+                      <span className="whitespace-pre-wrap text-muted">{item.text}</span>
+                    )}
                   </li>
                 ))}
               </ul>

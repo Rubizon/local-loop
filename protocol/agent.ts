@@ -4,20 +4,20 @@ import { assessStep } from "./session.ts";
 import type { Act, AgentEvent, AgentReply, Desk, DiffOp, LoopState, StepStatus } from "./types.ts";
 
 /** One job per call. The app already picked it. */
-export const SYS_USER = `JSON only. No markdown.
-{"say":"","goal":"","add":[],"cmd":null,"why":"","plan":null}
-Direct: one script, plan null. Chain commands that need no checkup.
+export const SYS_USER = `JSON only. No fence.
+{"say":"","goal":"","add":[],"cmd":null,"why":"","plan":null,"ask":null}
+Direct: one script, plan null. No checkup inside a script.
 Plan only if a later command needs unseen output, or force is 1. Then cmd is null.
-A step is one stop. Its cmd is one script. Separate commands with a blank line.
-Do not split unless the next command depends on that output.
+One step is one stop. Separate script commands with a blank line.
 plan items: {"do":"short","cmd":"or null","rb":0,"expect":"words that must appear"}
 Commands: ls, cat, put, pdf under /demo. put uses <<EOF.
-add is at most 4 short facts. Prefix KEEP to protect one.
-Do not invent file contents. say is the next action, not an unseen result.
+add is at most 4 facts. Prefix KEEP to protect one.
+Do not invent file contents. say may be short markdown.
+If a real choice is open, set ask to one short question and still return the plan.
 If goal is empty, add stays empty.`;
 
-export const SYS_FOLD = `JSON only. No markdown. No plan. No command.
-{"say":"one sentence","add":["short fact"]}
+export const SYS_FOLD = `JSON only. No fence. No plan. No command.
+{"say":"short markdown","add":["short fact"]}
 At most 4 new facts from OUT. Prefix KEEP if it must survive.
 Do not repeat facts already under F.`;
 
@@ -34,8 +34,8 @@ ok is 0 if OUT misses expect. rollback is 1 only if a write should be undone.
 Do not continue a step that is off the plan.`;
 
 export const SYS_REFINE = `JSON only. No markdown.
-{"say":"","plan":[{"do":"short","cmd":null,"rb":0,"expect":""}],"add":[]}
-Rewrite the plan. Leave cmd null.`;
+{"say":"","plan":[{"do":"short","cmd":null,"rb":0,"expect":""}],"ask":null}
+Rewrite the plan from the note. ask is one question only if a real choice is still open. No command.`;
 
 export const SYSTEM = SYS_USER;
 
@@ -152,6 +152,23 @@ function wantsList(text: string): boolean {
   return /\b(list|ls|show)\b/i.test(text) && /inbox|files|notes|demo/i.test(text);
 }
 
+function wantsOpenSummary(text: string): boolean {
+  return /summari|brief|analy/i.test(text) && /inbox|notes/i.test(text) && !/\bpdf\b|\btxt\b|text file/i.test(text);
+}
+
+function readStep(desk: Desk) {
+  const notes = Object.keys(desk.files)
+    .filter((path) => path.startsWith("/demo/inbox/") && path.endsWith(".txt"))
+    .sort();
+  return {
+    id: "1",
+    do: "Read the notes",
+    cmd: notes.length ? `cat ${notes.join(" ")}` : null,
+    rollback: false,
+    expect: notes.length ? "feature freeze, print budget 400" : "",
+  };
+}
+
 function wantsFriday(text: string): boolean {
   return /friday/i.test(text);
 }
@@ -198,14 +215,14 @@ function briefPlan(desk: Desk): DiffOp {
 }
 
 export function heuristicReply(state: LoopState, event: AgentEvent, desk: Desk): AgentReply | null {
-  if (event.kind === "fold") return foldReply(event);
+  if (event.kind === "fold") return foldReply(state, event);
   if (event.kind === "continue") return continueReply(state, event.stepId, desk);
   if (event.kind === "denied") {
     const diff: DiffOp[] = [{ op: "log", text: `Denied ${event.cmd.split("\n")[0]}` }];
     if (event.stepId) diff.push({ op: "step", id: event.stepId, status: "fail" });
     return reply("Denied. That command did not run.", diff, null);
   }
-  if (event.kind === "refine") return refineReply(state, event.text);
+  if (event.kind === "refine") return refineReply(state, event.text, desk);
   if (event.kind === "user") return userReply(state, event.text, event.forcePlan, desk);
   if (event.kind === "check") return checkReply(state, event);
   return null;
@@ -239,6 +256,13 @@ function userReply(state: LoopState, text: string, forcePlan: boolean, desk: Des
       { op: "log", text: "Waiting to list the inbox" },
     ], { type: "cmd", cmd: "ls /demo/inbox", why: "list notes" });
   }
+  if (wantsOpenSummary(t)) {
+    return reply("I can read the notes either way. Text file, PDF, or both?", [
+      { op: "goal", text: "Summarize the inbox notes." },
+      { op: "plan", steps: [readStep(desk)] },
+      { op: "log", text: "Waiting on the output format" },
+    ], { type: "ask", q: "Text file, PDF, or both?" });
+  }
   if (wantsFriday(t)) {
     const known = state.facts.find((f) => /friday|one-page pdf|ship the brief/i.test(f));
     if (known && !forcePlan) {
@@ -266,7 +290,18 @@ function userReply(state: LoopState, text: string, forcePlan: boolean, desk: Des
   return null;
 }
 
-function foldReply(event: Extract<AgentEvent, { kind: "fold" }>): AgentReply {
+function report(state: LoopState, title: string, tail: string): string {
+  const facts = state.facts
+    .map((fact) => fact.replace(/^KEEP\s+/i, "").trim())
+    .filter((fact) => fact && !/^(file |wrote |pdf |format:|note:)/i.test(fact))
+    .slice(0, 6);
+  const lines = [`## ${title}`, ""];
+  if (facts.length) lines.push(...facts.map((fact) => `- ${fact}`), "");
+  lines.push(tail);
+  return lines.join("\n");
+}
+
+function foldReply(state: LoopState, event: Extract<AgentEvent, { kind: "fold" }>): AgentReply {
   const parts = splitScript(event.cmd);
   const first = parts[0]?.split("\n")[0] || event.cmd.split("\n")[0];
   const diff: DiffOp[] = [{ op: "log", text: `${first} · ${event.meta}${event.total > 1 ? ` · part ${event.index}/${event.total}` : ""}` }];
@@ -288,14 +323,14 @@ function foldReply(event: Extract<AgentEvent, { kind: "fold" }>): AgentReply {
   const pdfs = parts.filter((part) => /^pdf\b/.test(part)).map((part) => part.split(/\s+/)[2] || "pdf");
   for (const path of wrote) diff.push({ op: "fact", text: `KEEP wrote ${path}` });
   for (const dest of pdfs) diff.push({ op: "fact", text: `KEEP pdf ${dest}` });
-  if (wrote.length && pdfs.length) return reply(`Wrote ${wrote.join(", ")} and ${pdfs.join(", ")} in one script.`, diff);
+  if (wrote.length && pdfs.length) return reply(report(state, "Inbox brief", `Wrote ${wrote.join(", ")} and ${pdfs.join(", ")}.`), diff);
   if (wrote.length) return reply(`Wrote ${wrote.join(", ")}.`, diff);
   if (pdfs.length) return reply(`Done. ${pdfs.join(", ")} is on the desk.`, diff);
   if (parts.some((part) => /^cat\b/.test(part))) {
     const friday = parts.some((part) => /friday\.txt/i.test(part));
     const ship = event.chunk.split("\n").find((line) => /ship the brief/i.test(line));
     const say = friday && ship
-      ? "Friday: ship the brief as a one-page PDF. Feature freeze, print budget 400, checkout timeout still open."
+      ? "## Friday\n\nShip the brief as a **one-page PDF**.\n\n- Feature freeze\n- Print budget 400\n- Checkout timeout still open"
       : "Kept the lines that matter from that read.";
     return reply(say, diff);
   }
@@ -354,13 +389,43 @@ function checkReply(state: LoopState, event: Extract<AgentEvent, { kind: "check"
   });
 }
 
-function refineReply(state: LoopState, text: string): AgentReply | null {
+function formatChoice(text: string): "pdf" | "text" | "both" | null {
+  const t = text.toLowerCase();
+  if (/\bboth\b/.test(t)) return "both";
+  if (/no pdf|without pdf|text only|just text|only text|txt only|text file/.test(t)) return "text";
+  if (/\bpdf\b/.test(t)) return "pdf";
+  if (/\btxt\b|\btext\b/.test(t)) return "text";
+  return null;
+}
+
+function textPlan(desk: Desk): DiffOp {
+  return {
+    op: "plan",
+    steps: [
+      readStep(desk),
+      { id: "2", do: "Write summary.txt", cmd: null, rollback: true, expect: "feature freeze, wrote /demo/out/summary.txt" },
+    ],
+  };
+}
+
+function refineReply(state: LoopState, text: string, desk: Desk): AgentReply | null {
   const t = text.trim();
   if (!t || !state.steps.length) return null;
+  const aboutInbox = /inbox|notes|summari|brief/i.test(`${state.goal} ${state.steps.map((s) => s.do).join(" ")}`);
+  const choice = formatChoice(t);
+  if (aboutInbox && choice) {
+    const withPdf = choice !== "text";
+    return reply(withPdf ? "Updated. The plan writes the notes and a PDF." : "Updated. Text file only, no PDF.", [
+      { op: "goal", text: withPdf ? "Summarize the inbox notes into a one-page PDF." : "Summarize the inbox notes into summary.txt." },
+      withPdf ? briefPlan(desk) : textPlan(desk),
+      { op: "fact", text: `KEEP format: ${choice}` },
+      { op: "log", text: `Clarified: ${choice}` },
+    ]);
+  }
   if (/skip pdf|no pdf|without pdf|drop pdf/i.test(t)) {
     const steps = state.steps.filter((s) => !/pdf/i.test(s.do) && !/^pdf\b/.test(s.cmd || ""));
     return reply("Dropped the PDF step. Review the shorter plan.", [
-      { op: "plan", steps },
+      { op: "plan", steps: steps.length ? steps : [readStep(desk)] },
       { op: "log", text: "Refine: no PDF" },
     ]);
   }
@@ -391,6 +456,8 @@ export function parseReply(raw: string, job?: Job): AgentReply {
     act = null;
   } else if (job === "continue") {
     diff = diff.filter((op) => op.op !== "plan" && op.op !== "clear-plan");
+  } else if (job === "refine" && act?.type !== "ask") {
+    act = null;
   }
   if (act?.type === "cmd") {
     const cmd = expandCmd(act.cmd);
@@ -423,7 +490,7 @@ function absorbFlat(json: Record<string, unknown>) {
 
 function clipSay(value: unknown): string {
   const text = typeof value === "string" ? value.trim() : "";
-  return text.length > 500 ? `${text.slice(0, 499)}…` : text;
+  return text.length > 2000 ? `${text.slice(0, 1999)}…` : text;
 }
 
 function verdictFromJson(json: Record<string, unknown>): { ok: boolean; why: string; rollback: boolean } {
@@ -504,6 +571,9 @@ function cmdString(value: unknown): string | null {
 }
 
 function parseAct(json: Record<string, unknown>): Act {
+  const ask = typeof json.ask === "string" && json.ask.trim() ? json.ask.trim() : "";
+  const planned = Array.isArray(json.plan) || Array.isArray(json.steps);
+  if (ask && planned) return { type: "ask", q: ask };
   const act = json.act;
   if (act && typeof act === "object") {
     const a = act as Record<string, unknown>;

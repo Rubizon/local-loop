@@ -25,3 +25,5 @@ OLLAMA_MODEL=qwen2.5-coder:3b-8k npm start
 ```
 
 Open http://127.0.0.1:3847
+
+A plan can ask one question. The answer rewrites the plan. Reports may be short markdown: headings, lists, emphasis, and code. Only normal web links are clickable.

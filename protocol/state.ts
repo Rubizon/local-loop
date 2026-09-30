@@ -150,7 +150,7 @@ export function applyReply(
 
 export function visibleAct(reply: AgentReply, state: LoopState, takeAct: boolean): AgentReply["act"] {
   if (!takeAct) return null;
-  if (state.phase === "review") return null;
+  if (state.phase === "review") return reply.act?.type === "ask" ? reply.act : null;
   return reply.act;
 }
 

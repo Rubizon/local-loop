@@ -11,9 +11,10 @@ import {
   seedDesk,
   summarizeNotes,
 } from "./desk.ts";
+import { looksLikeMarkup, parseMarkup, safeHref } from "./markup.ts";
 import { abortOffPlan, assessStep, cancelPlan, finishStep, startPlan, stepEvidence } from "./session.ts";
 import { supervise } from "./proc.ts";
-import { applyReply, emptyState, isKeep, normalizeState, parseState, serialize } from "./state.ts";
+import { applyReply, emptyState, isKeep, normalizeState, parseState, serialize, visibleAct } from "./state.ts";
 
 const brief = "Read the inbox notes, summarize them, and write a PDF.";
 
@@ -228,6 +229,35 @@ test("inbox plan runs, folds, writes a pdf, and rolls back", () => {
   assert.ok(undone.desk.files["/demo/inbox/monday.txt"]);
 });
 
+test("a plan can ask, and the answer rewrites it", () => {
+  const asked = heuristicReply(emptyState(), { kind: "user", text: "Summarize the inbox notes", forcePlan: false }, seedDesk());
+  assert.equal(asked?.act?.type, "ask");
+  assert.equal(asked && asked.act?.type === "ask" ? asked.act.q : "", "Text file, PDF, or both?");
+  let state = applyReply(emptyState(), asked!, { allowPlan: true, wipeWithoutGoal: true });
+  assert.equal(state.phase, "review");
+  assert.equal(visibleAct(asked!, state, true)?.type, "ask");
+  assert.equal(state.steps.some((step) => /pdf/i.test(step.do)), false);
+
+  const pdf = heuristicReply(state, { kind: "refine", text: "Both, as a PDF" }, seedDesk());
+  state = applyReply(state, pdf!, { allowPlan: true, wipeWithoutGoal: false });
+  assert.equal(state.phase, "review");
+  assert.ok(state.steps.some((step) => /pdf/i.test(step.do)));
+  assert.match(state.facts.join("\n"), /KEEP format: both/);
+
+  const text = heuristicReply(state, { kind: "refine", text: "Just a text file" }, seedDesk());
+  const textState = applyReply(state, text!, { allowPlan: true, wipeWithoutGoal: false });
+  assert.equal(textState.steps.some((step) => /pdf/i.test(step.do)), false);
+  assert.ok(textState.steps.some((step) => /summary\.txt/i.test(step.do)));
+
+  const explicit = heuristicReply(emptyState(), { kind: "user", text: brief, forcePlan: false }, seedDesk());
+  assert.equal(explicit?.act?.type, undefined);
+  const parsed = parseReply('{"say":"Need a format","plan":[{"do":"Read","cmd":"cat /demo/inbox/friday.txt","rb":0}],"ask":"PDF or text?"}', "user");
+  assert.equal(parsed.act?.type, "ask");
+  assert.ok(parsed.diff.some((op) => op.op === "plan"));
+  const refined = parseReply('{"say":"ok","plan":[{"do":"Read","cmd":null,"rb":0}],"cmd":"ls /demo","ask":"Still PDF?"}', "refine");
+  assert.equal(refined.act?.type, "ask");
+});
+
 test("friday answer is folded from the file, not invented", () => {
   const desk = seedDesk();
   const ask = heuristicReply(emptyState(), { kind: "user", text: "What did Friday decide?", forcePlan: false }, desk);
@@ -356,4 +386,36 @@ test("a hung command is killed and the loop can roll it back", async () => {
   const stopped = abortOffPlan(state, half.desk, half.snaps, "2", { why: half.result.stderr, rollback: true });
   assert.equal(stopped.desk.files["/demo/out/summary.txt"], undefined);
   assert.match(stopped.desk.files["/demo/inbox/friday.txt"], /one-page PDF/);
+});
+
+test("a report is markup and unsafe links are dropped", () => {
+  const state = { ...emptyState(), goal: "brief", facts: ["KEEP feature freeze", "KEEP file monday.txt"] };
+  const reply = heuristicReply(
+    state,
+    {
+      kind: "fold",
+      cmd: "put /demo/out/summary.txt <<EOF\nHi\nEOF\npdf /demo/out/summary.txt /demo/out/brief.pdf",
+      meta: "full",
+      chunk: "wrote",
+      index: 1,
+      total: 1,
+    },
+    seedDesk(),
+  );
+  assert.match(reply?.say || "", /^## Inbox brief/);
+  assert.equal(looksLikeMarkup(reply?.say || ""), true);
+  const blocks = parseMarkup(reply?.say || "");
+  assert.equal(blocks[0]?.type, "h");
+  assert.ok(blocks.some((block) => block.type === "ul"));
+  const linked = parseMarkup("See [notes](https://example.com/a) and [bad](javascript:alert(1)).\n\n```\nls\n```");
+  const paragraph = linked.find((block) => block.type === "p");
+  assert.ok(paragraph && paragraph.type === "p");
+  if (paragraph?.type === "p") {
+    assert.ok(paragraph.inlines.some((bit) => bit.type === "link" && bit.href === "https://example.com/a"));
+    assert.equal(paragraph.inlines.some((bit) => bit.type === "link"), true);
+    assert.equal(paragraph.inlines.some((bit) => bit.type === "link" && !bit.href.startsWith("https://")), false);
+  }
+  assert.ok(linked.some((block) => block.type === "pre"));
+  assert.equal(safeHref("javascript:alert(1)"), null);
+  assert.equal(looksLikeMarkup("Allow the read."), false);
 });
