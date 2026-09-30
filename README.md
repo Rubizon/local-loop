@@ -23,12 +23,12 @@ Clone once. After that, this is the only command. It fetches `main`, then starts
 ```bash
 git clone https://github.com/Rubizon/local-loop.git
 cd local-loop
-bash run.sh
+bash run.sh qwen3:4b-instruct
 ```
 
 Open http://127.0.0.1:3847
 
-`run.sh` resets this checkout to `origin/main`. Local edits in tracked files are discarded. `data/` is left alone. Set `PORT` if 3847 is taken. Set `OLLAMA_MODEL` before `bash run.sh` when a model should answer.
+`run.sh` resets this checkout to `origin/main`. Local edits in tracked files are discarded. `data/` is left alone. Set `PORT` if 3847 is taken. The first argument is the Ollama model. With no argument it uses `OLLAMA_MODEL` or `qwen2.5-coder:3b-8k`.
 
 ## Earlier harness
 
