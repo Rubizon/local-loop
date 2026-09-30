@@ -291,31 +291,25 @@ function dress(box, raw) {
   toggle.hidden = true;
   bar.appendChild(status);
   bar.appendChild(toggle);
+  const native = document.createElement("pre");
+  native.className = "native";
+  native.textContent = text;
   const read = document.createElement("div");
   read.className = "read";
-  const rawEl = document.createElement("pre");
-  rawEl.className = "raw";
-  rawEl.textContent = text;
-  rawEl.hidden = true;
+  read.hidden = true;
   body.appendChild(bar);
+  body.appendChild(native);
   body.appendChild(read);
-  body.appendChild(rawEl);
-  renderMarkdown(text, read);
-  var listing = window.LoopFormat && LoopFormat.isListing && LoopFormat.isListing(text);
-  if (listing) {
+  const small = window.LoopFormat && LoopFormat.canFormat && LoopFormat.canFormat(text);
+  if (!small) {
     status.hidden = true;
-    note("format", "left as text (" + text.split("\n").length + " lines)");
+    note("format", "left raw (" + text.length + " chars)");
     return;
-  }
-  var shaped = window.LoopFormat && LoopFormat.formatAnswer ? LoopFormat.formatAnswer(text) : text;
-  if (shaped && shaped.trim() !== text.trim()) {
-    renderMarkdown(shaped, read);
-    toggle.hidden = false;
   }
   let showRaw = false;
   function paint() {
     read.hidden = showRaw;
-    rawEl.hidden = !showRaw;
+    native.hidden = !showRaw;
     toggle.textContent = showRaw ? "Formatted" : "Raw";
   }
   toggle.onclick = function () {
@@ -331,14 +325,14 @@ function dress(box, raw) {
     .then(function (data) {
       var modelText = String((data && data.pretty) || text);
       var pretty = window.LoopFormat && LoopFormat.formatAnswer ? LoopFormat.formatAnswer(modelText) : modelText;
-      if (!/```/.test(pretty) && shaped && /```/.test(shaped)) pretty = shaped;
       if (pretty.trim() && pretty.trim() !== text.trim()) {
         renderMarkdown(pretty, read);
         toggle.hidden = false;
+        showRaw = false;
+        paint();
       }
-      note("format", "source:\n" + text + "\n\nlocal:\n" + shaped + "\n\nmarkup:\n" + modelText + "\n\nshown:\n" + pretty);
+      note("format", "source:\n" + text + "\n\nshown:\n" + pretty);
       status.hidden = true;
-      paint();
     })
     .catch(function (err) {
       note("format", "markup failed: " + (err && err.message ? err.message : "error") + "\n\nsource:\n" + text);

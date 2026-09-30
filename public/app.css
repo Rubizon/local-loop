@@ -95,11 +95,13 @@ main {
   line-height: 1.45;
 }
 .msg .body.answer { white-space: normal; }
+.native,
 .read pre.text,
 .reason-body {
   margin: 0;
   white-space: pre-wrap;
   overflow-wrap: break-word;
+  font-family: var(--mono);
 }
 .viewbar {
   display: flex;
@@ -181,7 +183,7 @@ button.tiny {
   font-size: 13px;
   line-height: 1.45;
 }
-.msg .body.answer .raw[hidden],
+.msg .body.answer .native[hidden],
 .msg .body.answer .read[hidden] { display: none; }
 .msg.err { color: #f0a8a8; }
 .msg .who { display: none; }

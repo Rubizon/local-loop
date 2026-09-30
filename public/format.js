@@ -161,6 +161,15 @@
     return names.length / lines.length >= 0.6;
   }
 
+  function canFormat(text) {
+    var s = String(text || "").trim();
+    if (!s || s.length > 500) return false;
+    var n = 0;
+    var lines = s.split("\n");
+    for (var i = 0; i < lines.length; i++) if (lines[i].trim()) n++;
+    return n > 0 && n <= 6 && s.indexOf("```") === -1;
+  }
+
   function alignPairs(block) {
     var lines = String(block || "").split("\n");
     if (lines.length < 2) return "";
@@ -229,5 +238,5 @@
     return alignLayout(raw);
   }
 
-  return { formatAnswer: formatAnswer, prettyBraces: prettyBraces, alignLayout: alignLayout, isListing: isListing };
+  return { formatAnswer: formatAnswer, prettyBraces: prettyBraces, alignLayout: alignLayout, isListing: isListing, canFormat: canFormat };
 });

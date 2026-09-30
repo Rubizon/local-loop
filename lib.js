@@ -609,13 +609,7 @@ function copiedFromPrompt(userText, thought) {
 }
 
 function needsMarkup(text) {
-  const s = String(text || "").trim();
-  if (!s || s.length > 500) return false;
-  const lines = s.split("\n").filter((l) => l.trim());
-  if (lines.length > 6) return false;
-  if (/```/.test(s)) return false;
-  if (/^(Directories|Files|Other)$/m.test(s)) return false;
-  return true;
+  return require("./public/format").canFormat(text);
 }
 
 function presentMarkup(raw, modelText) {
@@ -1857,6 +1851,7 @@ function runUnitTests() {
   check("listing is not sent for markup", needsMarkup("Here is /tmp.\n\nDirectories\n" + "a\n".repeat(20)) === false);
   check("a directory list stays text", require("./public/format").isListing("Here is /tmp.\n\nDirectories\n" + ".font-unix\n".repeat(10) + "\nFiles\na.txt\n") === true);
   check("a sentence is not a list", require("./public/format").isListing("2 plus 2 equals 4.") === false);
+  check("seven lines are left raw", require("./public/format").canFormat("a\nb\nc\nd\ne\nf\ng") === false);
   check("a short sentence can be marked up", needsMarkup("2 plus 2 equals 4.") === true);
   const joined = localTurn("concatenate all files in a directory", "");
   check("concat is one python command", !joined.needsModel && /python3/.test(joined.cmd || "") && /concatenated\.txt/.test(joined.cmd || ""));
