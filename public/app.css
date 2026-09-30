@@ -78,9 +78,8 @@ main {
   font-family: var(--mono);
   font-size: 13.5px;
   line-height: 1.45;
-  white-space: pre;
-  overflow-x: auto;
-  overflow-y: hidden;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
   max-width: 100%;
 }
 .msg.err { color: #f0a8a8; }

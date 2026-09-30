@@ -557,7 +557,6 @@ async function turn() {
   renderFiles();
   fitInput();
   addMsg("user", text);
-  const pending = addMsg("bot", "…");
   setBusy(true, "Thinking");
   const ac = new AbortController();
   const timer = setTimeout(function () {
@@ -574,9 +573,10 @@ async function turn() {
       return {};
     });
     if (!r.ok) throw new Error(data.error || "HTTP " + r.status);
+    let spoken = String(data.display || "").trim();
+    if (!spoken || spoken.charAt(0) === "{") spoken = "The reply was cut off before it had a command.";
+    const pending = addMsg("bot", spoken);
     showReason(pending.div, data.reason);
-    pending.body.textContent = (data.display || "(no text)").trim();
-    if (pending.event) pending.event.text = clipText(pending.body.textContent, 4000);
     renderContext(data.context);
     updateBudget();
     if (data.mode === "A") {
@@ -586,7 +586,7 @@ async function turn() {
       renderPending(pending.div);
     } else if (!data.plan || !data.plan.steps || !data.plan.steps.length) {
       plan = null;
-      pending.body.textContent = data.display || "I could not make a command for that.";
+      pending.body.textContent = spoken;
     } else {
       pendingA = null;
       plan = data.plan;
@@ -595,10 +595,7 @@ async function turn() {
       renderPlan(pending.div);
     }
   } catch (e) {
-    pending.div.className = "msg err";
-    pending.body.textContent =
-      e.name === "AbortError" ? "Timed out after 120s (Ollama busy or model not loaded)" : e.message;
-    if (pending.event) pending.event.text = clipText(pending.body.textContent, 4000);
+    addMsg("err", e.name === "AbortError" ? "Timed out after 120s (Ollama busy or model not loaded)" : e.message);
   } finally {
     clearTimeout(timer);
     setBusy(false);

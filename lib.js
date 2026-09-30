@@ -470,9 +470,20 @@ function heuristicPlan(text) {
   return null;
 }
 
+function salvageField(raw, key) {
+  const m = String(raw || "").match(new RegExp('"' + key + '"\\s*:\\s*"((?:\\\\.|[^"\\\\])*)"'));
+  return m ? m[1].replace(/\\n/g, " ").replace(/\\"/g, '"').trim() : "";
+}
+
 function parseThink(raw, userText) {
-  const parsed = extractJson(raw);
-  if (parsed._raw) return { reason: "", display: "", cmd: null, plan: null, failed: true };
+  let parsed = extractJson(raw);
+  if (parsed._raw) {
+    const reason = salvageField(raw, "reason");
+    const display = salvageField(raw, "display");
+    const cmd = salvageField(raw, "cmd");
+    if (!reason && !display && !cmd) return { reason: "", display: "", cmd: null, plan: null, failed: true };
+    parsed = { reason, display, cmd: cmd || null };
+  }
   const reason = typeof parsed.reason === "string" ? parsed.reason.trim() : "";
   const display = typeof parsed.display === "string" ? parsed.display.trim() : "";
   let plan = null;
@@ -504,7 +515,7 @@ function parseThink(raw, userText) {
     plan.ask = clip(userText, 200);
     if (!plan.steps[0].cmd && cmd) plan.steps[0].cmd = cmd;
   }
-  return { reason, display, cmd: plan && plan.steps[0] ? plan.steps[0].cmd : cmd, plan, failed: false };
+  return { reason, display, cmd: plan && plan.steps[0] ? plan.steps[0].cmd : cmd, plan, failed: !plan && !cmd && !display };
 }
 
 function reasonFor(decided) {
@@ -1124,6 +1135,8 @@ function runUnitTests() {
     "model thinks of the read",
     readThought.plan && readThought.plan.fromModel && /sed/.test(readThought.cmd) && /not been read/.test(readThought.reason) && !/don't already know/.test(readThought.reason)
   );
+  const cut = parseThink('{"reason":"I need the files.","display', "concat files");
+  check("cut off reply keeps the reason", cut.failed === true && cut.reason === "I need the files." && !cut.cmd);
   const numbers = heuristicPlan('create a file "foo.txt" and write there number 0 -> 100 inside.');
   check(
     "numbers file command",

@@ -355,7 +355,7 @@ app.post("/api/turn", async (req, res) => {
       mode: "A",
       why: "model",
       reason: thought.reason,
-      display: thought.display || (thought.failed ? lib.clip(raw, 500) : "I could not decide."),
+      display: thought.display || (thought.failed ? "The reply was cut off before it had a command." : "I could not decide."),
       cmd: null,
       context,
     });
