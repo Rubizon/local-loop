@@ -26,7 +26,13 @@ let lastGoodStep = null;
 
 const app = express();
 app.use(express.json({ limit: "2mb" }));
-app.use(express.static(path.join(__dirname, "public")));
+app.use(express.static(path.join(__dirname, "public"), {
+  etag: false,
+  lastModified: false,
+  setHeaders: function (res) {
+    res.setHeader("Cache-Control", "no-store");
+  },
+}));
 
 function loadContext() {
   try {

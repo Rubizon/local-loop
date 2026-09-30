@@ -42,9 +42,13 @@ function showSpinner(label) {
   chat.scrollTop = chat.scrollHeight;
 }
 
+function clearSpinners() {
+  var nodes = document.querySelectorAll(".spin");
+  for (var i = 0; i < nodes.length; i++) nodes[i].remove();
+}
+
 function hideSpinner() {
-  const el = document.getElementById("spin");
-  if (el) el.remove();
+  clearSpinners();
 }
 
 function setBusy(on, label) {
@@ -510,8 +514,10 @@ if (input) {
 var testBtn = document.getElementById("test");
 if (testBtn)
   testBtn.onclick = async function () {
-    const box = addMsg("bot", "");
-    setBusy(true, "Testing the model");
+    const box = addMsg("bot", "Testing the model…");
+    busy = true;
+    if (sendBtn) sendBtn.disabled = true;
+    clearSpinners();
     try {
       const r = await fetch("/api/model-test", { method: "POST" });
       const data = await r.json();
@@ -526,7 +532,9 @@ if (testBtn)
     } catch (e) {
       box.body.textContent = e.message;
     } finally {
-      setBusy(false);
+      busy = false;
+      if (sendBtn) sendBtn.disabled = false;
+      clearSpinners();
     }
   };
 
