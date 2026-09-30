@@ -101,8 +101,10 @@ function progressState(goal, index, total, notes) {
   const at = Math.max(1, Number(index) || 1);
   const n = Math.max(at, Number(total) || 1);
   lines.push("NEXT: reading part " + at + " of " + n);
-  const kept = (notes || []).map((x) => String(x || "").trim()).filter(Boolean).slice(-6);
-  if (kept.length) lines.push("FACT: " + clip(kept.join(" "), 700));
+  (notes || []).forEach((x) => {
+    const bit = String(x || "").trim();
+    if (bit) lines.push("NOTE: " + clip(bit, 240));
+  });
   return lines.join("\n");
 }
 
@@ -1178,7 +1180,7 @@ function runUnitTests() {
   check("oversized output splits", pieces.length > 1 && pieces[0].includes("START") && pieces[pieces.length - 1].includes("END"));
   check("preview keeps the tail count", /more characters$/.test(previewOutput("abcdef", 3)) && previewOutput("abcdef", 3).startsWith("abc"));
   const live = progressState("read lib.js", 2, 5, ["constants", "functions"]);
-  check("progress state is visible", /KEEP GOAL: read lib\.js/.test(live) && /part 2 of 5/.test(live) && /FACT: constants functions/.test(live));
+  check("progress state is visible", /KEEP GOAL: read lib\.js/.test(live) && /part 2 of 5/.test(live) && /NOTE: constants/.test(live) && /NOTE: functions/.test(live));
   check("ok string is success", parseCheck('{"ok":"ok","why":"ok"}', "").ok === true);
   const emitted = heuristicEmit(pdfPlan.steps[1], stated);
   check("emit pdf", emitted && /tmp-summary\.pdf/.test(emitted.cmd || "") && pdfBytes("names").slice(0, 5).toString() === "%PDF-");

@@ -145,6 +145,7 @@ function renderContext(text) {
     if (/^KEEP\s+GOAL:/i.test(line)) span.className += " keep-goal";
     else if (/^KEEP\b/i.test(line)) span.className += " keep";
     else if (/^FACT:/i.test(line)) span.className += " fact";
+    else if (/^NOTE:/i.test(line)) span.className += " note-line";
     span.textContent = line + "\n";
     ctxEl.appendChild(span);
   });
@@ -415,12 +416,27 @@ async function checkpoint(result, host) {
     ac.abort();
   }, 240000);
   let watch = true;
+  let live = null;
+  function paintLive(text) {
+    const lines = String(text || "").split("\n");
+    const notes = lines.filter(function (l) { return /^NOTE:/.test(l); }).map(function (l) { return l.replace(/^NOTE:\s*/, ""); });
+    const next = lines.find(function (l) { return /^NEXT:/.test(l); });
+    if (!notes.length && !next) return;
+    if (!live) {
+      live = addMsg("bot", "", true);
+      live.div.classList.add("live-sum", "draft");
+    }
+    const head = next ? next.replace(/^NEXT:\s*/, "") : "Summary";
+    live.body.textContent = head + (notes.length ? "\n\n" + notes.map(function (n, i) { return (i + 1) + ". " + n; }).join("\n") : "");
+    if (chat) chat.scrollTop = chat.scrollHeight;
+  }
   const poll = setInterval(function () {
     fetch("/api/state")
       .then(function (r) { return r.json(); })
       .then(function (s) {
         if (!watch || !s) return;
         renderContext(s.context || "");
+        paintLive(s.context || "");
         const next = String(s.context || "").split("\n").find(function (l) { return /^NEXT:/.test(l); });
         if (next) setBusy(true, next.replace(/^NEXT:\s*/, ""));
       })
@@ -441,8 +457,12 @@ async function checkpoint(result, host) {
     note("plan", planText(plan));
     renderContext(d.check.context);
     const finished = d.done || (d.plan && d.plan.steps && d.plan.steps.length && d.plan.steps.every(function (s) { return s.status === "ok"; }));
-    if (d.say) addMsg("bot", d.say);
-    else if (d.report) addMsg("bot", d.report);
+    const said = d.say || d.report;
+    if (said && live) {
+      live.div.classList.remove("draft");
+      live.body.textContent = said;
+      note("loop", said);
+    } else if (said) addMsg("bot", said);
     if (finished) {
       plan = null;
       check = null;

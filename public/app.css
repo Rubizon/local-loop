@@ -194,6 +194,9 @@ aside h2 { margin: 0 0 6px; font-size: 14px; font-weight: 600; }
 .keep-goal { color: #fff; }
 .keep { color: #e4e4e7; }
 .fact { color: var(--muted); }
+.note-line { color: var(--fg); }
+.live-sum .body { white-space: pre-wrap; }
+.live-sum.draft .body { color: #d4d4d8; }
 footer { padding: 8px 16px 18px; }
 .composer {
   width: min(760px, 100%);
