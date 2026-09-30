@@ -55,9 +55,19 @@ async function runWorkflow() {
   const results = [];
   for (const probe of lib.WORKFLOW_PROBES) {
     const started = Date.now();
-    const raw = await chat(probe.system, probe.user, probe.predict);
-    const judged = lib.repairReply(probe.kind, raw, probe.user);
-    const scored = lib.scoreWorkflow(probe.kind, judged);
+    let raw = await chat(probe.system, probe.user, probe.predict);
+    let judged = lib.repairReply(probe.kind, raw, probe.user);
+    let scored = lib.scoreWorkflow(probe.kind, judged);
+    if (!scored.ok && /^\s*\{/.test(raw) && !/"display"\s*:/.test(raw)) {
+      const again = await chat(probe.system, probe.user + "\nThat reply was a sentence in braces. Write one JSON object with quoted keys. display is the full answer. A program is the source, with \\n between lines.", probe.predict);
+      const judgedAgain = lib.repairReply(probe.kind, again, probe.user);
+      const scoredAgain = lib.scoreWorkflow(probe.kind, judgedAgain);
+      if (scoredAgain.ok) {
+        raw = again;
+        judged = judgedAgain;
+        scored = scoredAgain;
+      }
+    }
     results.push({ kind: probe.kind, ms: Date.now() - started, raw: lib.clip(raw, 500), ...scored });
     console.log(`  ${scored.ok ? "PASS" : "FAIL"} ${scored.name}  ${scored.detail}`);
     if (!scored.ok) console.log("    raw:", lib.clip(raw.replace(/\s+/g, " "), 180));

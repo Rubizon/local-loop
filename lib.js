@@ -49,6 +49,7 @@ cmd is the shell command behind Approve. It has not run.
 cmd is null only for arithmetic, or for a program they asked to see. Put that program in display.
 For anything else, cmd is required. The clock, the user, the host, the directory, the disk, and any path they named are on this PC. Do not say you lack access.
 Tomorrow's date or time uses the date command. A path they named is printed by cmd. A directory they named is listed by cmd. A python command they asked for is in cmd, not in display.
+Write quoted keys. Do not wrap a sentence in braces. A program they asked to see is the source in display, not a sentence that ends with a colon.
 If State says a file exists, it exists. Do not overwrite it unless the user asked to change that file. Showing it is a read command.`;
 
 const SYSTEM_SAY = `Report the command output. JSON only. The first character is {.
@@ -648,6 +649,14 @@ function salvageProgram(raw) {
   return program;
 }
 
+function looseBrace(raw) {
+  const text = String(raw || "").trim();
+  if (!text.startsWith("{") || !text.endsWith("}")) return "";
+  const inner = text.slice(1, -1).trim();
+  if (!inner || /"\s*:/.test(inner)) return "";
+  return inner;
+}
+
 function repairReply(kind, raw, userText) {
   const thinkKinds = { think: 1, ask: 1, concat: 1, code: 1, clock: 1, weekday: 1, host: 1, who: 1, cwd: 1, disk: 1, listing: 1 };
   if (!thinkKinds[kind]) return String(raw || "");
@@ -664,6 +673,10 @@ function repairReply(kind, raw, userText) {
       return JSON.stringify({ reason: "They asked to see the program.", display: program, cmd: null });
     }
     if (!parsed._raw) return source;
+  }
+  const loose = parsed._raw ? looseBrace(source) : "";
+  if (loose && (kind === "ask" || /\bwhat is \d+/i.test(user))) {
+    return JSON.stringify({ reason: "The answer is in the reply.", display: loose, cmd: null });
   }
   let reason = !parsed._raw && typeof parsed.reason === "string" ? parsed.reason.trim() : "";
   let display = !parsed._raw && typeof parsed.display === "string" ? parsed.display.trim() : "";
@@ -2187,7 +2200,7 @@ function runUnitTests() {
   check("program stays in the answer", shown && !shown.cmd && !shown.plan && /puts/.test(shown.display) && shown.display.includes("\n"));
   const lifted = parseThink('{"reason":"search","display":"grep \\"error\\" /tmp/app.log\\nor\\nrg error /tmp/app.log","cmd":null}', "find error");
   check("command in the answer is runnable", lifted.cmd && /^grep /.test(lifted.cmd) && /app\.log/.test(lifted.cmd));
-  check("prompt has no sample file", !/lib\.js/.test(SYSTEM_THINK) && !/"cmd":null/.test(SYSTEM_THINK) && /Reasoning line/.test(SYSTEM_THINK) && /already done/.test(SYSTEM_THINK) && /date command/.test(SYSTEM_THINK) && /file exists/.test(SYSTEM_THINK));
+  check("prompt has no sample file", !/lib\.js/.test(SYSTEM_THINK) && !/"cmd":null/.test(SYSTEM_THINK) && /Reasoning line/.test(SYSTEM_THINK) && /already done/.test(SYSTEM_THINK) && /date command/.test(SYSTEM_THINK) && /file exists/.test(SYSTEM_THINK) && /quoted keys/.test(SYSTEM_THINK));
   check("repair clock", scoreWorkflow("clock", repairReply("clock", '{"reason":"I need the current time.","display":"I cannot determine the time because real-time access is not available.","cmd":null}', "User: what time is it tomorrow?")).ok === true);
   check("repair weekday", scoreWorkflow("weekday", repairReply("weekday", '{"reason":"I will use the system date.","display":"I will add one day.","cmd":null}', "User: what day is it tomorrow?")).ok === true);
   check("repair think", scoreWorkflow("think", repairReply("think", '{"reason":"The request is to read /tmp/lib.js.","display":"I have read and reported the content of /tmp/lib.js.","cmd":null}', "User: read this file and report /tmp/lib.js")).ok === true);
@@ -2200,6 +2213,8 @@ function runUnitTests() {
   check("repair clock refusal in the reason", scoreWorkflow("clock", repairReply("clock", '{"reason":"I cannot determine the time. Real-time access is not available.","display":"No.","cmd":"date"}', "User: what time is it tomorrow?\nThe first character of your reply is {.")).ok === true);
   check("repair who refusal", scoreWorkflow("who", repairReply("who", '{"reason":"I cannot access the user account.","display":"Unavailable.","cmd":null}', "User: who is logged in on this PC?\nThe first character of your reply is {.")).ok === true);
   check("repair broken C program", scoreWorkflow("code", repairReply("code", '{A simple C program that prints "hello world" is as follows: {display}: #include <stdio.h>\nint main(void) { printf("hello world\\n"); return 0; }', "User: write a simple C program that prints hello world\nThe first character of your reply is {.")).ok === true);
+  check("brace arithmetic is an answer", scoreWorkflow("ask", repairReply("ask", "{2 + 2 = 4}", "User: what is 2+2\nThe first character of your reply is {.")).ok === true);
+  check("brace intro is not the program", scoreWorkflow("code", repairReply("code", '{A simple C program that prints "hello world" is as follows:}', "User: write a simple C program that prints hello world")).ok === false);
   check("markup knows it is format", /pressed Format/.test(SYSTEM_MARKUP) && /Do not invent files/.test(SYSTEM_MARKUP));
   check("copied sample is rejected", copiedFromPrompt("display information about this os", { reason: "I have not read the file the user named, so I cannot summarize it yet.", display: "I'll read the whole file.", cmd: "cat /tmp/lib.js" }));
   check("intro is not the answer", thinAnswer({ display: "Here is a simple C program that prints 'hello world':", cmd: null, plan: null }));

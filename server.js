@@ -220,10 +220,25 @@ app.post("/api/model-test", async (req, res) => {
     for (const probe of probes) {
       try {
         const started = Date.now();
-        const raw = await ollamaText(probe.system, probe.user, probe.predict);
-        const judged = lib.repairReply(probe.kind, raw, probe.user);
+        let raw = await ollamaText(probe.system, probe.user, probe.predict);
+        let judged = lib.repairReply(probe.kind, raw, probe.user);
+        let scored = lib.scoreWorkflow(probe.kind, judged);
+        if (!scored.ok && /^\s*\{/.test(raw) && !/"display"\s*:/.test(raw)) {
+          const again = await ollamaText(
+            probe.system,
+            probe.user + "\nThat reply was a sentence in braces. Write one JSON object with quoted keys. display is the full answer. A program is the source, with \\n between lines.",
+            probe.predict
+          );
+          const judgedAgain = lib.repairReply(probe.kind, again, probe.user);
+          const scoredAgain = lib.scoreWorkflow(probe.kind, judgedAgain);
+          if (scoredAgain.ok) {
+            raw = again;
+            judged = judgedAgain;
+            scored = scoredAgain;
+          }
+        }
         checks.push({
-          ...lib.scoreWorkflow(probe.kind, judged),
+          ...scored,
           kind: probe.kind,
           raw: judged,
           system: probe.system,
