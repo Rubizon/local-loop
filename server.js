@@ -75,13 +75,13 @@ function runCommand(cmd, cwd, stepId) {
     return Promise.resolve({ cmd: safe, cwd: dest, code: 0, stdout: "wrote " + abs, stderr: "" });
   }
   return new Promise((resolve) => {
-    exec(safe, { cwd: dest, timeout: 20000, maxBuffer: 200000, env: process.env }, (err, stdout, stderr) => {
+    exec(safe, { cwd: dest, timeout: 20000, maxBuffer: 500000, env: process.env }, (err, stdout, stderr) => {
       const result = {
         cmd: safe,
         cwd: dest,
         code: err && Number.isFinite(err.code) ? err.code : err ? 1 : 0,
-        stdout: String(stdout || "").slice(0, 8000),
-        stderr: String(stderr || "").slice(0, 4000),
+        stdout: String(stdout || "").slice(0, 400000),
+        stderr: String(stderr || "").slice(0, 80000),
       };
       if (stepId && /^zip\b/.test(safe) && result.code === 0) {
         const out = (safe.match(/(\S+\.zip)/) || [])[1];
@@ -108,14 +108,27 @@ function loadReadText(cmd, stdout) {
   }
 }
 
-async function reduceReport(task, text) {
-  const chunks = lib.chunkText(text, 2200).slice(0, 28);
-  if (!chunks.length) return "";
+function programText(cmd, stdout, stderr) {
+  const out = String(stdout || "");
+  const err = String(stderr || "").trim();
+  const disk = loadReadText(cmd, "");
+  let text = disk && disk.length > out.length ? disk : out;
+  if (err && text.indexOf(err.slice(0, 40)) === -1) text = text ? text + "\n" + err : err;
+  return text;
+}
+
+async function reduceReport(task, text, depth) {
+  const body = String(text || "");
+  if (!body.trim()) return "";
+  const budget = lib.contextCharBudget();
   const ask = lib.clip(task, 240);
-  if (chunks.length === 1) {
-    const parsed = lib.extractJson(await ollamaText(lib.SYSTEM_SAY, "Task: " + ask + "\n\nOutput:\n" + chunks[0], 280));
+  if (body.length <= budget || depth > 3) {
+    const parsed = lib.extractJson(
+      await ollamaText(lib.SYSTEM_SAY, "Task: " + ask + "\n\nOutput:\n" + lib.clip(body, budget), 280)
+    );
     return typeof parsed.say === "string" ? parsed.say.trim() : "";
   }
+  const chunks = lib.chunkText(body, budget);
   const notes = [];
   for (let i = 0; i < chunks.length; i++) {
     try {
@@ -131,15 +144,7 @@ async function reduceReport(task, text) {
     } catch (_) {}
   }
   if (!notes.length) return "";
-  const parsed = lib.extractJson(
-    await ollamaText(
-      lib.SYSTEM_SAY,
-      "Task: " + ask + "\n\nNotes from the file, in order:\n" + notes.map((n, i) => i + 1 + ". " + n).join("\n"),
-      320
-    )
-  );
-  const say = typeof parsed.say === "string" ? parsed.say.trim() : "";
-  return say || notes.join(" ");
+  return reduceReport(task, notes.map((n, i) => i + 1 + ". " + n).join("\n"), (depth || 0) + 1);
 }
 
 async function ollamaText(system, user, numPredict = 280) {
@@ -464,9 +469,12 @@ app.post("/api/check", async (req, res) => {
     }
     const summarySeed = check.summary || "";
     let reportText = "";
-    if (plan && plan.fromModel && check.ok) {
+    const produced = programText(result && result.cmd, result && result.stdout, result && result.stderr);
+    const overContext = produced.length > lib.contextCharBudget();
+    const listing = /^ls\b/.test(String((result && result.cmd) || "").trim());
+    if (check.ok && !listing && ((plan && plan.fromModel) || overContext)) {
       try {
-        reportText = await reduceReport(plan.ask || plan.goal || "", loadReadText(result && result.cmd, result && result.stdout));
+        reportText = await reduceReport(plan.ask || plan.goal || (step && step.do) || "", produced, 0);
       } catch (_) {
         reportText = "";
       }
@@ -508,7 +516,9 @@ app.post("/api/check", async (req, res) => {
       cwd: sessionCwd,
     });
     if (reportText) say = reportText;
-    else if (plan && plan.fromModel && check.ok) say = "I read it, but I could not summarize it.";
+    else if (check.ok && !listing && ((plan && plan.fromModel) || overContext)) {
+      say = "The output was too large to report in one pass, and the summary failed.";
+    }
     saveContext(check.context);
     res.json({ check, plan: nextPlan, report: ending, say: say, done: !!ending, cwd: sessionCwd });
   } catch (err) {

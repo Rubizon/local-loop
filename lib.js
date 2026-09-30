@@ -90,6 +90,10 @@ function readPathFromCmd(cmd) {
   return file || null;
 }
 
+function contextCharBudget() {
+  return Math.max(2000, ((Number(NUM_CTX) || 8192) - 1000) * 3);
+}
+
 function clip(s, n) {
   const t = String(s || "");
   return t.length <= n ? t : t.slice(0, n) + "…";
@@ -1150,6 +1154,9 @@ function runUnitTests() {
   check("chunks cover the text", parts.length >= 2 && parts.join("\n").includes("one") && parts.join("\n").includes("four"));
   check("read path from sed", readPathFromCmd("sed -n '1,160p' /home/user/local-loop/lib.js") === "/home/user/local-loop/lib.js");
   check("read path ignores ls", readPathFromCmd("ls -la /tmp") === null);
+  const big = "START\n" + "x".repeat(contextCharBudget() + 40) + "\nEND";
+  const pieces = chunkText(big, contextCharBudget());
+  check("oversized output splits", pieces.length > 1 && pieces[0].includes("START") && pieces[pieces.length - 1].includes("END"));
   check("ok string is success", parseCheck('{"ok":"ok","why":"ok"}', "").ok === true);
   const emitted = heuristicEmit(pdfPlan.steps[1], stated);
   check("emit pdf", emitted && /tmp-summary\.pdf/.test(emitted.cmd || "") && pdfBytes("names").slice(0, 5).toString() === "%PDF-");
@@ -1240,6 +1247,7 @@ module.exports = {
   SYSTEM_SAY,
   SYSTEM_NOTE,
   MODEL_PROBE_USER,
+  contextCharBudget,
   clip,
   chunkText,
   readPathFromCmd,
