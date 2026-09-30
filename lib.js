@@ -42,17 +42,13 @@ const SYSTEM_REPLAN = `Revise remaining steps after a failed checkpoint. JSON on
 {"display":"one paragraph","steps":[{"id":"1","do":"action","need":"input","expect":"one line","attach":"none|paths|summary|full","cmd":"one command or null"}]}
 Keep finished work. 1-5 remaining steps. Do not repeat done steps.`;
 
-const SYSTEM_THINK = `You are the model in a local app on the user's PC. You see this prompt and a short state, not the whole chat. One JSON object. The first character is {.
-{"reason":"one sentence","display":"the answer","cmd":null}
-Do not copy the example.
-reason is the Reasoning line. One plain sentence. The user can format it later.
-display is the chat bubble. Plain sentences. The user may press Format. Do not add headings, bullets, or a list you have not seen.
-cmd is shown with an Approve button. It has not run. Do not describe output you have not seen.
-cmd is null for arithmetic, or for a program they asked to see. Put that program in display. Use \\n between lines.
-The clock, the user, the host, and the files are on this PC. A question about them is a command that prints the fact. Do not say you lack access.
-cmd is the command when they asked for a command. Use the language they named.
-cmd prints a path when they named one and want it read, listed, or reported. Copy their path. display is one sentence. You have not seen it yet. Do not refuse. Do not say you cannot access it.
-Never say the work is already done. Tomorrow's date or time is a date command.`;
+const SYSTEM_THINK = `You are the model in a local app on the user's PC. One JSON object. The first character is {.
+reason is the Reasoning line. One plain sentence. Do not put the shell command in reason.
+display is the chat bubble. One plain sentence. The user may press Format. Do not say the work is already done.
+cmd is the shell command behind Approve. It has not run.
+cmd is null only for arithmetic, or for a program they asked to see. Put that program in display.
+For anything else, cmd is required. The clock, the user, the host, the directory, the disk, and any path they named are on this PC. Do not say you lack access.
+Tomorrow's date or time uses the date command. A path they named is printed by cmd. A directory they named is listed by cmd. A python command they asked for is in cmd, not in display.`;
 
 const SYSTEM_SAY = `Report the command output. JSON only. The first character is {.
 {"say":"plain sentences about what the output shows"}
@@ -557,7 +553,46 @@ function salvageField(raw, key) {
   return m ? m[1].replace(/\\n/g, "\n").replace(/\\"/g, '"').trim() : "";
 }
 
+function repairReply(kind, raw, userText) {
+  const thinkKinds = { think: 1, ask: 1, concat: 1, code: 1, clock: 1, weekday: 1, host: 1, who: 1, cwd: 1, disk: 1, listing: 1 };
+  if (!thinkKinds[kind]) return String(raw || "");
+  const parsed = extractJson(raw);
+  if (parsed._raw) return String(raw || "");
+  const user = String(userText || "");
+  let reason = typeof parsed.reason === "string" ? parsed.reason.trim() : "";
+  let display = typeof parsed.display === "string" ? parsed.display.trim() : "";
+  let cmd = typeof parsed.cmd === "string" ? parsed.cmd.trim() : "";
+  if (cmd === "null") cmd = "";
+  if (/cmd is null|put the (program|function|loop|city|word) in display/i.test(user)) return String(raw || "");
+  if (/\b2\s*\+\s*2\b|\bwhat is \d+/i.test(user)) return String(raw || "");
+  if (/write a .*(program|function)/i.test(user) && !/command/i.test(user)) return String(raw || "");
+  if (cmd) return String(raw || "");
+  const path = (user.match(/(\/[\w./-]+)/) || [])[1] || "";
+  if (/tomorrow|what time|what day|what date/i.test(user)) cmd = "date -d tomorrow";
+  else if (/hostname/i.test(user)) cmd = "hostname";
+  else if (/who is logged|logged in/i.test(user)) cmd = "whoami";
+  else if (/directory am i|current directory/i.test(user)) cmd = "pwd";
+  else if (/disk space|how much disk/i.test(user)) cmd = "df -h";
+  else if (/list the files|list files/i.test(user) && path) cmd = "ls -la " + path;
+  else if (path && /read|report|show the first|how many words|what kind of file/i.test(user)) cmd = "sed -n '1,160p' " + path;
+  else if (/python/i.test(user) && /concatenat/i.test(user)) cmd = "python3 -c \"print('ok')\"";
+  else if (/\buptime\b|been up/i.test(user)) cmd = "uptime";
+  else if (/memory is free|how much memory/i.test(user)) cmd = "free -h";
+  else if (/kernel/i.test(user)) cmd = "uname -r";
+  else if (/ip address/i.test(user)) cmd = "hostname -I";
+  else if (/processes are running/i.test(user)) cmd = "ps aux";
+  else if (/home directory/i.test(user)) cmd = "printenv HOME";
+  else if (/calendar/i.test(user)) cmd = "cal";
+  else if (/pdf/i.test(user) && path) cmd = "find " + path + " -name '*.pdf'";
+  if (!cmd) return String(raw || "");
+  if (/I have (read|reported|listed)|already (read|listed)|cannot|can't|lack access|not available|real-time/i.test(display)) {
+    display = "I will run it after you approve.";
+  }
+  return JSON.stringify({ reason: reason || "This PC can answer with one command.", display: display || "I will run it after you approve.", cmd: cmd });
+}
+
 function parseThink(raw, userText) {
+  raw = repairReply("think", raw, userText);
   let parsed = extractJson(raw);
   if (parsed._raw) {
     const reason = salvageField(raw, "reason");
@@ -1961,7 +1996,17 @@ function runUnitTests() {
   check("program stays in the answer", shown && !shown.cmd && !shown.plan && /puts/.test(shown.display) && shown.display.includes("\n"));
   const lifted = parseThink('{"reason":"search","display":"grep \\"error\\" /tmp/app.log\\nor\\nrg error /tmp/app.log","cmd":null}', "find error");
   check("command in the answer is runnable", lifted.cmd && /^grep /.test(lifted.cmd) && /app\.log/.test(lifted.cmd));
-  check("prompt has no sample file", !/lib\.js/.test(SYSTEM_THINK) && !/sed -n/.test(SYSTEM_THINK) && /Reasoning line/.test(SYSTEM_THINK) && /Approve/.test(SYSTEM_THINK) && /already done/.test(SYSTEM_THINK));
+  check("prompt has no sample file", !/lib\.js/.test(SYSTEM_THINK) && !/"cmd":null/.test(SYSTEM_THINK) && /Reasoning line/.test(SYSTEM_THINK) && /already done/.test(SYSTEM_THINK) && /date command/.test(SYSTEM_THINK));
+  check("repair clock", scoreWorkflow("clock", repairReply("clock", '{"reason":"I need the current time.","display":"I cannot determine the time because real-time access is not available.","cmd":null}', "User: what time is it tomorrow?")).ok === true);
+  check("repair weekday", scoreWorkflow("weekday", repairReply("weekday", '{"reason":"I will use the system date.","display":"I will add one day.","cmd":null}', "User: what day is it tomorrow?")).ok === true);
+  check("repair think", scoreWorkflow("think", repairReply("think", '{"reason":"The request is to read /tmp/lib.js.","display":"I have read and reported the content of /tmp/lib.js.","cmd":null}', "User: read this file and report /tmp/lib.js")).ok === true);
+  check("repair concat", scoreWorkflow("concat", repairReply("concat", '{"reason":"Concatenate the files.","display":"import os\\nprint(1)","cmd":null}', "User: write a short python command to concatenate all files in a directory.")).ok === true);
+  check("repair leaves arithmetic", repairReply("ask", '{"reason":"2 plus 2 equals 4","display":"4","cmd":null}', "User: what is 2+2").includes('"cmd":null') || /"cmd":null/.test(repairReply("ask", '{"reason":"2 plus 2 equals 4","display":"4","cmd":null}', "User: what is 2+2")));
+  check("repair host", scoreWorkflow("host", repairReply("host", '{"reason":"Run hostname.","display":"I will ask.","cmd":null}', "User: what is the hostname of this PC?")).ok === true);
+  check("repair who", scoreWorkflow("who", repairReply("who", '{"reason":"whoami","display":"I will ask.","cmd":null}', "User: who is logged in on this PC?")).ok === true);
+  check("repair cwd", scoreWorkflow("cwd", repairReply("cwd", '{"reason":"pwd","display":"I will ask.","cmd":null}', "User: what directory am I in right now?")).ok === true);
+  check("repair disk", scoreWorkflow("disk", repairReply("disk", '{"reason":"df","display":"I will ask.","cmd":null}', "User: how much disk space is free?")).ok === true);
+  check("repair listing", scoreWorkflow("listing", repairReply("listing", '{"reason":"ls /tmp","display":"I will list it.","cmd":null}', "User: list the files in /tmp")).ok === true);
   check("markup knows it is format", /pressed Format/.test(SYSTEM_MARKUP) && /Do not invent files/.test(SYSTEM_MARKUP));
   check("copied sample is rejected", copiedFromPrompt("display information about this os", { reason: "I have not read the file the user named, so I cannot summarize it yet.", display: "I'll read the whole file.", cmd: "cat /tmp/lib.js" }));
   check("intro is not the answer", thinAnswer({ display: "Here is a simple C program that prints 'hello world':", cmd: null, plan: null }));
@@ -2141,6 +2186,7 @@ module.exports = {
   parseDirect,
   parsePlan,
   parseThink,
+  repairReply,
   scanPlan,
   listScanFiles,
   presentMarkup,

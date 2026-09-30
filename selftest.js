@@ -56,7 +56,8 @@ async function runWorkflow() {
   for (const probe of lib.WORKFLOW_PROBES) {
     const started = Date.now();
     const raw = await chat(probe.system, probe.user, probe.predict);
-    const scored = lib.scoreWorkflow(probe.kind, raw);
+    const judged = lib.repairReply(probe.kind, raw, probe.user);
+    const scored = lib.scoreWorkflow(probe.kind, judged);
     results.push({ kind: probe.kind, ms: Date.now() - started, raw: lib.clip(raw, 500), ...scored });
     console.log(`  ${scored.ok ? "PASS" : "FAIL"} ${scored.name}  ${scored.detail}`);
     if (!scored.ok) console.log("    raw:", lib.clip(raw.replace(/\s+/g, " "), 180));

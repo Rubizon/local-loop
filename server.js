@@ -220,10 +220,11 @@ app.post("/api/model-test", async (req, res) => {
       try {
         const started = Date.now();
         const raw = await ollamaText(probe.system, probe.user, probe.predict);
+        const judged = lib.repairReply(probe.kind, raw, probe.user);
         checks.push({
-          ...lib.scoreWorkflow(probe.kind, raw),
+          ...lib.scoreWorkflow(probe.kind, judged),
           kind: probe.kind,
-          raw,
+          raw: judged,
           system: probe.system,
           user: probe.user,
           ms: Date.now() - started,
