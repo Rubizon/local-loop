@@ -186,6 +186,21 @@ async function ollamaText(system, user, numPredict = 280) {
   return String((data.message && data.message.content) || "").trim();
 }
 
+app.post("/api/drop", (req, res) => {
+  try {
+    const rawName = String((req.body && req.body.name) || "pasted.txt");
+    const name = rawName.replace(/[^A-Za-z0-9._-]/g, "_").replace(/^\.+/, "").slice(0, 80) || "pasted.txt";
+    const text = String((req.body && req.body.text) || "");
+    if (!text) return res.status(400).json({ error: "empty file" });
+    if (text.length > 1500000) return res.status(400).json({ error: "file is larger than 1.5 MB" });
+    const abs = path.join(sessionCwd, name);
+    fs.writeFileSync(abs, text);
+    res.json({ path: abs, bytes: Buffer.byteLength(text) });
+  } catch (err) {
+    res.status(500).json({ error: String(err.message || err) });
+  }
+});
+
 app.get("/api/state", (_req, res) => {
   res.json({
     model: OLLAMA_MODEL,

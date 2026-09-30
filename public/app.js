@@ -1,6 +1,8 @@
 const chat = document.getElementById("chat");
 const ctxEl = document.getElementById("ctx");
 const input = document.getElementById("input");
+const filesEl = document.getElementById("files");
+const composer = document.getElementById("composer");
 const sendBtn = document.getElementById("send");
 const budgetEl = document.getElementById("budget");
 const chipModel = document.getElementById("chipModel");
@@ -13,6 +15,7 @@ let pendingA = null;
 let plan = null;
 let check = null;
 let numCtx = 8192;
+let attached = [];
 const trace = [];
 
 function clipText(text, n) {
@@ -544,10 +547,15 @@ async function doReplan(startOver, host) {
 
 async function turn() {
   if (!input) return;
-  const text = input.value.trim();
+  const typed = input.value.trim();
+  const paths = attached.map(function (f) { return f.path; });
+  const text = [typed, paths.length ? "Files:\n" + paths.join("\n") : ""].filter(Boolean).join("\n\n");
   if (!text || busy) return;
   setHold("");
   input.value = "";
+  attached = [];
+  renderFiles();
+  fitInput();
   addMsg("user", text);
   const pending = addMsg("bot", "…");
   setBusy(true, "Thinking");
@@ -598,6 +606,53 @@ async function turn() {
 }
 
 if (sendBtn) sendBtn.onclick = turn;
+function fitInput() {
+  if (!input) return;
+  input.style.height = "auto";
+  const max = Math.round(window.innerHeight * 0.32);
+  input.style.height = Math.min(input.scrollHeight, Math.max(44, max)) + "px";
+}
+function renderFiles() {
+  if (!filesEl) return;
+  filesEl.innerHTML = "";
+  attached.forEach(function (f) {
+    const chip = document.createElement("span");
+    chip.className = "file-chip";
+    const kb = Math.max(1, Math.round(f.bytes / 1024));
+    chip.textContent = f.name + " · " + kb + " KB";
+    filesEl.appendChild(chip);
+  });
+}
+async function stashText(text, name) {
+  const r = await fetch("/api/drop", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name: name || "pasted.txt", text: text }),
+  });
+  const data = await r.json();
+  if (!r.ok) throw new Error(data.error || "could not store the file");
+  attached.push({ name: name || "pasted.txt", path: data.path, bytes: data.bytes || text.length });
+  renderFiles();
+}
+function takeFiles(list) {
+  Array.prototype.forEach.call(list, function (file) {
+    const reader = new FileReader();
+    reader.onload = function () {
+      const text = String(reader.result || "");
+      if (!text) return;
+      if (text.length <= 4000 && input) {
+        input.value = (input.value ? input.value + "\n" : "") + text;
+        fitInput();
+        updateBudget();
+        return;
+      }
+      stashText(text, file.name || "dropped.txt").catch(function (err) {
+        addMsg("err", err.message);
+      });
+    };
+    reader.readAsText(file);
+  });
+}
 if (input) {
   input.addEventListener("keydown", function (e) {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -606,7 +661,35 @@ if (input) {
     }
   });
   input.addEventListener("input", function () {
+    fitInput();
     updateBudget();
+  });
+  input.addEventListener("paste", function (e) {
+    const files = e.clipboardData && e.clipboardData.files;
+    if (files && files.length) {
+      e.preventDefault();
+      takeFiles(files);
+      return;
+    }
+    const text = e.clipboardData && e.clipboardData.getData("text");
+    if (text && text.length > 8000) {
+      e.preventDefault();
+      stashText(text, "pasted.txt").catch(function (err) { addMsg("err", err.message); });
+    }
+  });
+}
+if (composer) {
+  composer.addEventListener("dragover", function (e) {
+    e.preventDefault();
+    composer.classList.add("over");
+  });
+  composer.addEventListener("dragleave", function () {
+    composer.classList.remove("over");
+  });
+  composer.addEventListener("drop", function (e) {
+    e.preventDefault();
+    composer.classList.remove("over");
+    if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length) takeFiles(e.dataTransfer.files);
   });
 }
 
@@ -733,6 +816,9 @@ if (clearBtn)
     hideSpinner();
     if (chat) chat.replaceChildren();
     if (input) input.value = "";
+    attached = [];
+    renderFiles();
+    fitInput();
     try {
       await refresh();
     } catch (_) {
