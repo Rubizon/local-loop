@@ -296,6 +296,18 @@ app.post("/api/prompt-stats", (req, res) => {
   res.json(lib.estimatePrompt(loadContext(), text, extra));
 });
 
+app.post("/api/markup", async (req, res) => {
+  const text = String((req.body && req.body.text) || "");
+  const source = text.trim();
+  if (!source) return res.json({ pretty: "" });
+  try {
+    const raw = await ollamaText(lib.SYSTEM_MARKUP, lib.clip(source, 4000), 600);
+    res.json({ pretty: lib.presentMarkup(source, raw) });
+  } catch (err) {
+    res.json({ pretty: source, error: String(err.message || err) });
+  }
+});
+
 app.post("/api/turn", async (req, res) => {
   try {
     const text = String((req.body && req.body.text) || "").trim();

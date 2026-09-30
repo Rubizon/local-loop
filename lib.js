@@ -58,6 +58,12 @@ const SYSTEM_NOTE = `One JSON object. The first character is {.
 {"note":"one sentence of what this part adds"}
 Do not paste code.`;
 
+const SYSTEM_MARKUP = `Make the answer easier to read. Output markdown only. No JSON.
+Do not add facts, paths, or commands that are not already in the text.
+Use short paragraphs and bullet lists.
+Put code in a fenced block with a language tag.
+Do not start with "Here is".`;
+
 const MODEL_PROBE_USER = 'Reply with JSON only: {"display":"PING-OK","cmd":null}';
 
 function chunkText(text, size) {
@@ -544,6 +550,21 @@ function copiedFromPrompt(userText, thought) {
   if (/I have not read the file the user named/.test(blob)) return true;
   if (/I'll read the whole file/.test(blob) && !/whole file/.test(user)) return true;
   return false;
+}
+
+function presentMarkup(raw, modelText) {
+  const source = String(raw || "").trim();
+  let s = String(modelText || "").trim();
+  if (!s) return source;
+  const wrapped = s.match(/^```(?:markdown|md)?[^\n]*\n([\s\S]*?)\n```$/);
+  if (wrapped) s = wrapped[1].trim();
+  if (s.startsWith("{")) {
+    const parsed = extractJson(s);
+    if (!parsed._raw && typeof parsed.md === "string" && parsed.md.trim()) s = parsed.md.trim();
+    else return source;
+  }
+  if (!s || /Make the answer easier to read|Do not add facts/.test(s)) return source;
+  return s;
 }
 
 function thinAnswer(thought) {
@@ -1471,6 +1492,9 @@ function runUnitTests() {
   check("command in the answer is runnable", lifted.cmd && /^grep /.test(lifted.cmd) && /app\.log/.test(lifted.cmd));
   check("prompt has no sample file", !/lib\.js/.test(SYSTEM_THINK) && !/I'll read the whole file/.test(SYSTEM_THINK));
   check("copied sample is rejected", copiedFromPrompt("display information about this os", { reason: "I have not read the file the user named, so I cannot summarize it yet.", display: "I'll read the whole file.", cmd: "cat /tmp/lib.js" }));
+  check("intro is not the answer", thinAnswer({ display: "Here is a simple C program that prints 'hello world':", cmd: null, plan: null }));
+  check("markup keeps the words", presentMarkup("prints hello", "```md\n- prints hello\n```") === "- prints hello");
+  check("markup ignores a lecture", presentMarkup("prints hello", "Make the answer easier to read. Do not add facts.") === "prints hello");
   const parts = chunkText("one\ntwo\nthree\nfour", 8);
   check("chunks cover the text", parts.length >= 2 && parts.join("\n").includes("one") && parts.join("\n").includes("four"));
   check("read path from sed", readPathFromCmd("sed -n '1,160p' /home/user/local-loop/lib.js") === "/home/user/local-loop/lib.js");
@@ -1572,6 +1596,7 @@ module.exports = {
   SYSTEM_THINK,
   SYSTEM_SAY,
   SYSTEM_NOTE,
+  SYSTEM_MARKUP,
   MODEL_PROBE_USER,
   contextCharBudget,
   progressState,
@@ -1590,6 +1615,7 @@ module.exports = {
   parseDirect,
   parsePlan,
   parseThink,
+  presentMarkup,
   thinAnswer,
   copiedFromPrompt,
   USER_SCENARIOS,

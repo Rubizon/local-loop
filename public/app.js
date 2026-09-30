@@ -84,6 +84,175 @@ function setBusy(on, label) {
   else hideSpinner();
 }
 
+function addInline(parent, text) {
+  const re = /(`[^`]+`|\*\*[^*]+\*\*)/g;
+  let last = 0;
+  let match;
+  while ((match = re.exec(text))) {
+    if (match.index > last) parent.appendChild(document.createTextNode(text.slice(last, match.index)));
+    const bit = match[0];
+    if (bit.charAt(0) === "`") {
+      const code = document.createElement("code");
+      code.className = "inline";
+      code.textContent = bit.slice(1, -1);
+      parent.appendChild(code);
+    } else {
+      const strong = document.createElement("strong");
+      strong.textContent = bit.slice(2, -2);
+      parent.appendChild(strong);
+    }
+    last = match.index + bit.length;
+  }
+  if (last < text.length) parent.appendChild(document.createTextNode(text.slice(last)));
+}
+
+function addCodeBox(host, lang, code) {
+  const box = document.createElement("div");
+  box.className = "codebox";
+  const bar = document.createElement("div");
+  bar.className = "codebar";
+  const name = document.createElement("span");
+  name.textContent = lang || "code";
+  const copy = document.createElement("button");
+  copy.type = "button";
+  copy.className = "tiny";
+  copy.textContent = "Copy";
+  copy.onclick = function () {
+    const done = function () {
+      copy.textContent = "Copied";
+      setTimeout(function () { copy.textContent = "Copy"; }, 1200);
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(code).then(done).catch(function () { copy.textContent = "Copy failed"; });
+    } else copy.textContent = "Copy failed";
+  };
+  bar.appendChild(name);
+  bar.appendChild(copy);
+  const pre = document.createElement("pre");
+  const el = document.createElement("code");
+  el.textContent = code.replace(/\n$/, "");
+  pre.appendChild(el);
+  box.appendChild(bar);
+  box.appendChild(pre);
+  host.appendChild(box);
+}
+
+function addBlocks(host, text) {
+  const lines = String(text || "").replace(/\r\n/g, "\n").split("\n");
+  let para = [];
+  let list = null;
+  function flushPara() {
+    if (!para.length) return;
+    const p = document.createElement("p");
+    addInline(p, para.join(" "));
+    host.appendChild(p);
+    para = [];
+  }
+  function flushList() {
+    list = null;
+  }
+  lines.forEach(function (line) {
+    const bullet = line.match(/^\s*[-*]\s+(.*)$/);
+    const numbered = line.match(/^\s*\d+[.)]\s+(.*)$/);
+    if (!line.trim()) {
+      flushPara();
+      flushList();
+      return;
+    }
+    if (bullet || numbered) {
+      flushPara();
+      if (!list || (numbered && list.tagName !== "OL") || (bullet && list.tagName !== "UL")) {
+        list = document.createElement(numbered ? "ol" : "ul");
+        host.appendChild(list);
+      }
+      const li = document.createElement("li");
+      addInline(li, (bullet || numbered)[1]);
+      list.appendChild(li);
+      return;
+    }
+    flushList();
+    para.push(line.trim());
+  });
+  flushPara();
+}
+
+function renderMarkdown(md, host) {
+  host.textContent = "";
+  const src = String(md || "").replace(/\r\n/g, "\n");
+  const re = /```([^\n`]*)\n([\s\S]*?)```/g;
+  let last = 0;
+  let match;
+  while ((match = re.exec(src))) {
+    if (match.index > last) addBlocks(host, src.slice(last, match.index));
+    addCodeBox(host, match[1].trim(), match[2]);
+    last = match.index + match[0].length;
+  }
+  if (last < src.length) addBlocks(host, src.slice(last));
+  if (!host.childNodes.length) {
+    const p = document.createElement("p");
+    p.textContent = src;
+    host.appendChild(p);
+  }
+}
+
+function dress(box, raw) {
+  if (!box || !box.body) return;
+  const text = String(raw || "");
+  const body = box.body;
+  body.textContent = "";
+  body.classList.add("answer");
+  const bar = document.createElement("div");
+  bar.className = "viewbar";
+  const status = document.createElement("span");
+  status.className = "status";
+  status.textContent = "Formatting";
+  const toggle = document.createElement("button");
+  toggle.type = "button";
+  toggle.className = "tiny ghost";
+  toggle.textContent = "Raw";
+  toggle.hidden = true;
+  bar.appendChild(status);
+  bar.appendChild(toggle);
+  const read = document.createElement("div");
+  read.className = "read";
+  const rawEl = document.createElement("pre");
+  rawEl.className = "raw";
+  rawEl.textContent = text;
+  rawEl.hidden = true;
+  body.appendChild(bar);
+  body.appendChild(read);
+  body.appendChild(rawEl);
+  renderMarkdown(text, read);
+  let showRaw = false;
+  function paint() {
+    read.hidden = showRaw;
+    rawEl.hidden = !showRaw;
+    toggle.textContent = showRaw ? "Formatted" : "Raw";
+  }
+  toggle.onclick = function () {
+    showRaw = !showRaw;
+    paint();
+  };
+  fetch("/api/markup", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text: text }),
+  })
+    .then(function (r) { return r.json(); })
+    .then(function (data) {
+      const pretty = String((data && data.pretty) || text);
+      if (pretty.trim() && pretty.trim() !== text.trim()) {
+        renderMarkdown(pretty, read);
+        toggle.hidden = false;
+      }
+      status.hidden = true;
+      paint();
+    })
+    .catch(function () {
+      status.hidden = true;
+    });
+}
+
 function addMsg(role, text, quiet) {
   const div = document.createElement("div");
   div.className = "msg " + role;
@@ -419,8 +588,10 @@ async function checkpoint(result, host) {
     ac.abort();
   }, 240000);
   let watch = true;
+  let dressed = false;
   let live = null;
   function paintLive(text) {
+    if (dressed) return;
     const lines = String(text || "").split("\n");
     const notes = lines.filter(function (l) { return /^NOTE:/.test(l); }).map(function (l) { return l.replace(/^NOTE:\s*/, ""); });
     const next = lines.find(function (l) { return /^NEXT:/.test(l); });
@@ -461,11 +632,12 @@ async function checkpoint(result, host) {
     renderContext(d.check.context);
     const finished = d.done || (d.plan && d.plan.steps && d.plan.steps.length && d.plan.steps.every(function (s) { return s.status === "ok"; }));
     const said = d.say || d.report;
+    dressed = true;
     if (said && live) {
       live.div.classList.remove("draft");
-      live.body.textContent = said;
       note("loop", said);
-    } else if (said) addMsg("bot", said);
+      dress(live, said);
+    } else if (said) dress(addMsg("bot", said), said);
     if (finished) {
       plan = null;
       check = null;
@@ -594,6 +766,7 @@ async function turn() {
       note("plan", planText(plan));
       renderPlan(pending.div);
     }
+    dress(pending, spoken);
   } catch (e) {
     addMsg("err", e.name === "AbortError" ? "Timed out after 120s (Ollama busy or model not loaded)" : e.message);
   } finally {
