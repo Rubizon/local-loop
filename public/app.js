@@ -169,70 +169,77 @@ function rowBtns(host, items) {
 function renderPending(host) {
   const old = host.querySelector(".plan");
   if (old) old.remove();
+  if (!pendingA || !pendingA.cmd || pendingA.result) return;
   const wrap = document.createElement("div");
   wrap.className = "plan";
   const h = document.createElement("div");
   h.className = "plan-h";
-  h.textContent = "Direct — nothing is stored yet";
+  h.textContent = "Approve the command. The model then reads the output and updates state.";
   wrap.appendChild(h);
-  if (pendingA.cmd && !pendingA.result) {
-    const line = document.createElement("div");
-    line.className = "plan-row";
-    const k = document.createElement("span");
-    k.className = "plan-k";
-    k.textContent = "RUN";
-    line.appendChild(k);
-    line.appendChild(document.createTextNode(pendingA.cmd));
-    wrap.appendChild(line);
-  }
+  const line = document.createElement("div");
+  line.className = "plan-row";
+  const k = document.createElement("span");
+  k.className = "plan-k";
+  k.textContent = "RUN";
+  line.appendChild(k);
+  line.appendChild(document.createTextNode(pendingA.cmd));
+  wrap.appendChild(line);
   host.appendChild(wrap);
-  const items = [];
-  if (pendingA.cmd && !pendingA.result) {
-    items.push({
+  setHold("Waiting for you. Approve the command. After it runs, the model reads the output and updates state.");
+  rowBtns(wrap, [
+    {
       label: "Approve",
       ok: true,
       fn: async function () {
         try {
           await applyOne(pendingA.cmd, null, host, function (result) {
             pendingA.result = result;
-            renderPending(host);
+            return rememberOutput();
           });
         } catch (e) {
           addMsg("err", e.message);
         }
       },
-    });
-    items.push({
-      label: "Skip command",
-      fn: function () {
-        pendingA.cmd = null;
-        renderPending(host);
-      },
-    });
-  }
-  items.push({
-    label: "Add",
-    ok: true,
-    fn: function () {
-      addContext(false);
     },
-  });
-  if (pendingA.result) {
-    items.push({
-      label: "Add with output",
+    {
+      label: "Skip",
       fn: function () {
-        addContext(true);
+        pendingA = null;
+        setHold("");
+        wrap.remove();
+        addMsg("bot", "Command skipped. State unchanged.");
       },
-    });
-  }
-  items.push({
-    label: "Discard",
-    fn: function () {
-      pendingA = null;
-      wrap.remove();
     },
-  });
-  rowBtns(wrap, items);
+  ]);
+}
+
+async function rememberOutput() {
+  if (!pendingA) return;
+  setBusy(true, "Reading the output");
+  try {
+    const before = context.trim();
+    const r = await fetch("/api/add", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        userText: pendingA.userText,
+        display: pendingA.display,
+        output: pendingA.result ? pendingA.result.stdout : "",
+      }),
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || "state update failed");
+    renderContext(d.context);
+    updateBudget();
+    const kept = String(d.context || "").trim();
+    if (!kept) addMsg("bot", "Read the output. No goal yet, so state stayed empty.");
+    else if (kept === before) addMsg("bot", "Read the output. State already had what mattered.");
+    else addMsg("bot", "Read the output and updated state.");
+    pendingA = null;
+    setHold("");
+  } finally {
+    setBusy(false);
+  }
 }
 
 function renderPlan(host) {
@@ -256,7 +263,8 @@ function renderPlan(host) {
     k.className = "plan-k";
     k.textContent = (s.status || "todo").toUpperCase();
     line.appendChild(k);
-    line.appendChild(document.createTextNode(s.do + "  · expect " + s.expect + " · keep " + s.attach));
+    const keep = s.attach === "none" ? "output is not stored" : "then the model reads the output and updates state";
+    line.appendChild(document.createTextNode(s.do + " · " + keep));
     wrap.appendChild(line);
   });
   if (check) {
@@ -356,29 +364,6 @@ async function applyOne(cmd, stepId, host, after) {
     }
     host.appendChild(term);
     if (after) await after(data.result);
-  } finally {
-    setBusy(false);
-  }
-}
-
-async function addContext(withOutput) {
-  if (!pendingA) return;
-  setBusy(true, "Rewriting context");
-  try {
-    const r = await fetch("/api/add", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        userText: pendingA.userText,
-        display: pendingA.display,
-        output: withOutput && pendingA.result ? pendingA.result.stdout : undefined,
-      }),
-    });
-    const d = await r.json();
-    if (!r.ok) throw new Error(d.error || "add failed");
-    renderContext(d.context);
-    pendingA = null;
-    updateBudget();
   } finally {
     setBusy(false);
   }

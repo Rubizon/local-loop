@@ -27,7 +27,7 @@
     <section id="thread">
       <div id="chat"></div>
       <footer>
-        <textarea id="input" placeholder="Direct: one answer, maybe one command. Plan: a task tree. Nothing is stored until Add."></textarea>
+        <textarea id="input" placeholder="One command, or a plan. After it runs, the model reads the output and updates state."></textarea>
         <div class="composer-bar">
           <span id="budget" class="meter">~0 / 8192</span>
           <span class="hint" id="modeHint">Direct · Enter send</span>
@@ -37,7 +37,7 @@
     </section>
     <aside>
       <h2>Working context</h2>
-      <p class="hint">Always visible. Rewritten in full on Add. Drop a line by asking. KEEP survives.</p>
+      <p class="hint">Always visible. After a command, the model rewrites it from the output. Nothing is stored until there is a goal.</p>
       <pre id="ctx">(empty)</pre>
     </aside>
   </main>

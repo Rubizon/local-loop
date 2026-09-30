@@ -22,8 +22,9 @@ Rules:
 
 const SYSTEM_PLAN = `Plan a small task tree. JSON only:
 {"display":"one paragraph","goal":"KEEP GOAL line","steps":[{"id":"1","do":"action","need":"input","expect":"checkpoint in one line","attach":"none|paths|summary|full","cmd":"one command or null"}]}
-3-6 steps. One command per step, or cmd null to ask the user (need = the question).
-attach = how to keep that step's output. expect = how we know the step worked.`;
+One command per step. cmd null only to ask the user.
+After each command the checkpoint reads the output and rewrites state. Do not add a step that asks the user to save output.
+attach is what that rewrite keeps: summary for listings, paths for files written, none if state should not change.`;
 
 const SYSTEM_CHECK = `Checkpoint a plan step. JSON only:
 {"ok":true,"why":"one line","ask":null,"replan":false,"startOver":false,"next":"next","attach":"none|paths|summary|full","context":"full rewritten context"}
