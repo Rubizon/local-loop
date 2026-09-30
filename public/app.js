@@ -273,6 +273,23 @@ function addMsg(role, text, quiet) {
   return { div: div, body: body, event: event };
 }
 
+function showDoubt(box, warning) {
+  if (!box || !warning) return;
+  const el = document.createElement("div");
+  el.className = "unsure";
+  const k = document.createElement("div");
+  k.className = "unsure-k";
+  k.textContent = warning.sign || "I am unsure what I am doing here.";
+  const p = document.createElement("div");
+  p.textContent = warning.why || "";
+  el.appendChild(k);
+  el.appendChild(p);
+  const body = box.querySelector(".body");
+  if (body) box.insertBefore(el, body);
+  else box.appendChild(el);
+  note("unsure", (warning.sign || "") + " " + (warning.why || ""));
+}
+
 function showReason(box, text) {
   if (!box || !text) return;
   const el = document.createElement("div");
@@ -646,6 +663,8 @@ async function checkpoint(result, host) {
       return;
     }
     renderPlan(host);
+    const nxt = plan && plan.steps && plan.steps[plan.cursor];
+    if (nxt && !nxt.cmd && nxt.status !== "ok") await runPlanStep(host);
   } catch (e) {
     addMsg("err", e.name === "AbortError" ? "Stopped. The output summary took longer than 4 minutes." : e.message);
     renderPlan(host);
@@ -748,6 +767,7 @@ async function turn() {
     let spoken = String(data.display || "").trim();
     if (!spoken || spoken.charAt(0) === "{") spoken = "The reply was cut off before it had a command.";
     const pending = addMsg("bot", spoken);
+    showDoubt(pending.div, data.warning);
     showReason(pending.div, data.reason);
     renderContext(data.context);
     updateBudget();

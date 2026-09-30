@@ -192,6 +192,14 @@ button.tiny {
   text-transform: uppercase;
   margin-bottom: 4px;
 }
+.unsure {
+  margin: 0 0 12px;
+  padding: 8px 10px;
+  border-left: 2px solid #e0b15a;
+  color: #f3e2b8;
+  font-size: 14px;
+}
+.unsure-k { font-weight: 600; margin-bottom: 2px; }
 .plan {
   margin-top: 10px;
   border: 1px solid var(--line);

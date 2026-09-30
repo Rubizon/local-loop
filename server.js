@@ -308,6 +308,24 @@ app.post("/api/markup", async (req, res) => {
   }
 });
 
+function reply(decided, context) {
+  let next = context;
+  if (!decided.cmd && !decided.plan && !decided.warning && lib.hasGoal(context)) {
+    next = lib.rememberAnswer(context, decided.display);
+    if (next !== context) saveContext(next);
+  }
+  return {
+    mode: decided.mode,
+    why: decided.why,
+    reason: decided.reason,
+    display: decided.display,
+    cmd: decided.warning ? null : decided.cmd,
+    plan: decided.warning ? null : decided.plan,
+    warning: decided.warning || null,
+    context: next,
+  };
+}
+
 app.post("/api/turn", async (req, res) => {
   try {
     const text = String((req.body && req.body.text) || "").trim();
@@ -319,15 +337,7 @@ app.post("/api/turn", async (req, res) => {
         ledger = [];
         lastGoodStep = null;
       }
-      return res.json({
-        mode: decided.mode,
-        why: decided.why,
-        reason: decided.reason,
-        display: decided.display,
-        cmd: decided.cmd,
-        plan: decided.plan,
-        context,
-      });
+      return res.json(reply(decided, context));
     }
     const rawFirst = await ollamaText(
       lib.SYSTEM_THINK,
@@ -335,51 +345,44 @@ app.post("/api/turn", async (req, res) => {
       700
     );
     let thought = lib.parseThink(rawFirst, text);
-    if (lib.thinAnswer(thought) || lib.copiedFromPrompt(text, thought)) {
+    if (thought.failed || lib.thinAnswer(thought) || lib.copiedFromPrompt(text, thought)) {
       const rawAgain = await ollamaText(
         lib.SYSTEM_THINK,
-        "User:\n" + lib.clip(text, 2000) + "\n\nAnswer this user only. Do not repeat an example. Do not name a file they did not name.\n\nState:\n" + (context || "(empty)"),
+        "User:\n" + lib.clip(text, 2000) + "\n\nAnswer this user only. Finish the JSON. Do not repeat an example. Do not name a file they did not name.\n\nState:\n" + (context || "(empty)"),
         700
       );
       const again = lib.parseThink(rawAgain, text);
-      if (again.display && !lib.thinAnswer(again) && !lib.copiedFromPrompt(text, again)) thought = again;
+      if (!again.failed && again.display && !lib.thinAnswer(again) && !lib.copiedFromPrompt(text, again)) thought = again;
     }
-    if (thought.plan && thought.plan.steps && thought.plan.steps.length) {
-      const cmd = thought.plan.steps[0].cmd;
-      if (cmd) {
-        try {
-          lib.assertSafeCmd(cmd);
-        } catch (err) {
-          return res.json({
-            mode: "A",
-            why: "model",
-            reason: thought.reason,
-            display: String(err.message || err),
-            cmd: null,
-            context,
-          });
-        }
+    const settled = lib.settle(text, thought);
+    if (settled.plan && settled.plan.steps && settled.plan.steps.length && settled.plan.steps[0].cmd) {
+      try {
+        lib.assertSafeCmd(settled.plan.steps[0].cmd);
+      } catch (err) {
+        return res.json(reply({
+          mode: "A",
+          why: "model",
+          reason: settled.reason,
+          display: String(err.message || err),
+          cmd: null,
+          plan: null,
+          warning: { sign: "I am unsure what I am doing here.", why: "That command is not safe to run." },
+        }, context));
       }
+    }
+    if (settled.plan && !settled.warning) {
       ledger = [];
       lastGoodStep = null;
-      return res.json({
-        mode: "B",
-        why: "model",
-        reason: thought.reason,
-        display: thought.display || "Plan: " + String(thought.plan.goal || "").replace(/^KEEP GOAL:\s*/i, ""),
-        cmd: cmd,
-        plan: thought.plan,
-        context,
-      });
     }
-    return res.json({
-      mode: "A",
+    return res.json(reply({
+      mode: settled.plan && !settled.warning ? "B" : "A",
       why: "model",
-      reason: thought.reason,
-      display: thought.display || (thought.failed ? "The reply was cut off before it had a command." : "I could not decide."),
-      cmd: null,
-      context,
-    });
+      reason: settled.reason,
+      display: settled.display || (settled.warning ? settled.warning.sign : "I could not decide."),
+      cmd: settled.cmd,
+      plan: settled.plan,
+      warning: settled.warning,
+    }, context));
   } catch (err) {
     res.status(500).json({ error: String(err.message || err) });
   }

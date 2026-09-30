@@ -567,6 +567,107 @@ function presentMarkup(raw, modelText) {
   return s;
 }
 
+function vagueJob(text) {
+  const t = String(text || "").trim();
+  if (!t) return false;
+  const vague = /\b(clean\s*up|tidy|fix (it|this|my)|optimize|make it better|do something|help me|sort (this|it) out)\b/i.test(t);
+  const concrete = /\/[A-Za-z0-9]|\b(file|files|pdf|csv|list|show)\b|\d/.test(t);
+  return vague && !concrete;
+}
+
+function concatPlan(text) {
+  if (!/\bconcatenat/i.test(text) || !/\bfiles?\b/i.test(text)) return null;
+  if (/\b(zip|pdf|csv|xlsx)\b/i.test(text)) return null;
+  const cmd = "python3 -c \"import os; names=sorted(n for n in os.listdir('.') if os.path.isfile(n) and n!='concatenated.txt'); open('concatenated.txt','w').write(''.join(open(n,encoding='utf-8',errors='replace').read() for n in names))\"";
+  return {
+    goal: "KEEP GOAL: concatenate the files in this directory into concatenated.txt",
+    cursor: 0,
+    steps: [
+      { id: "1", do: "Concatenate the files here into concatenated.txt", need: "", expect: "concatenated.txt written", attach: "paths", cmd: cmd, status: "todo" },
+    ],
+  };
+}
+
+function inventedPath(userText, cmd) {
+  const user = String(userText || "");
+  const known = /^\/(etc\/os-release|etc\/hostname|proc\/version|proc\/cpuinfo|proc\/meminfo|dev\/null)$/;
+  const paths = String(cmd || "").match(/\/[A-Za-z0-9._/-]+/g) || [];
+  for (let i = 0; i < paths.length; i++) {
+    const p = paths[i].replace(/\/+$/, "") || "/";
+    if (user.includes(p)) continue;
+    if (known.test(p)) continue;
+    return p;
+  }
+  return "";
+}
+
+function twoCommands(display) {
+  const lines = String(display || "").split("\n").map((s) => s.trim()).filter(Boolean);
+  const cmds = lines.filter((l) => /^(grep|rg|cat|sed|awk|wc|ls|python3?|bash)\b/.test(l));
+  return cmds.length > 1;
+}
+
+function runnableScript(userText, display) {
+  if (!/\b(run|execute|concatenat|do it)\b/i.test(String(userText || ""))) return "";
+  const text = String(display || "").trim();
+  if (text.split("\n").length < 2) return "";
+  if (!/\b(import |def |print\(|open\()/.test(text)) return "";
+  const b64 = Buffer.from(text, "utf8").toString("base64");
+  return "python3 -c \"import base64; exec(base64.b64decode('" + b64 + "'))\"";
+}
+
+function oneStep(userText, display, cmd) {
+  return {
+    goal: "KEEP GOAL: " + clip(userText, 140),
+    ask: clip(userText, 200),
+    cursor: 0,
+    fromModel: true,
+    steps: [
+      { id: "1", do: display || "Run the command", need: "", expect: "the command output", attach: "summary", cmd: cmd, status: "todo" },
+    ],
+  };
+}
+
+function settle(userText, thought) {
+  const sign = "I am unsure what I am doing here.";
+  const t = {
+    reason: (thought && thought.reason) || "",
+    display: (thought && thought.display) || "",
+    cmd: (thought && thought.cmd) || null,
+    plan: (thought && thought.plan) || null,
+    failed: !!(thought && thought.failed),
+    warning: null,
+  };
+  const script = !t.cmd && runnableScript(userText, t.display);
+  if (script) {
+    t.cmd = script;
+    t.plan = oneStep(userText, "Run the script", script);
+    t.failed = false;
+    return t;
+  }
+  let why = "";
+  if (t.failed) why = "The reply stopped before it finished.";
+  else if (thinAnswer(t)) why = "The reply stopped after an introduction.";
+  else if (copiedFromPrompt(userText, t)) why = "That looked like an example, not your request.";
+  else if (t.cmd && inventedPath(userText, t.cmd)) why = "The command names " + inventedPath(userText, t.cmd) + ", which you did not mention.";
+  else if (/\bpython\b/i.test(String(userText || "")) && t.cmd && !/\bpython/.test(t.cmd)) why = "You asked for Python. This command is something else.";
+  else if (twoCommands(t.display)) why = "More than one command was offered.";
+  if (why) {
+    t.warning = { sign: sign, why: why };
+    t.cmd = null;
+    t.plan = null;
+    if (!t.display || t.failed) t.display = sign;
+  }
+  return t;
+}
+
+function rememberAnswer(context, display) {
+  if (!hasGoal(context)) return String(context || "");
+  const bit = clip(String(display || "").replace(/\s+/g, " "), 160);
+  if (bit.length < 8) return String(context || "");
+  return clipContext(String(context || "").replace(/\s*$/, "") + "\nFACT: " + bit);
+}
+
 function thinAnswer(thought) {
   const display = String((thought && thought.display) || "").trim();
   return !!(thought && !thought.cmd && !thought.plan && display && /:\s*$/.test(display) && !display.includes("\n"));
@@ -591,6 +692,32 @@ function reasonFor(decided) {
 }
 
 function localTurn(text, context) {
+  const vague = vagueJob(text);
+  if (vague) {
+    return {
+      mode: "A",
+      why: "vague",
+      display: "I am unsure what I am doing here.",
+      reason: "There is no file, directory, or finished result in that request.",
+      cmd: null,
+      plan: null,
+      needsModel: false,
+      warning: { sign: "I am unsure what I am doing here.", why: "Say which files or directory, and what done looks like." },
+    };
+  }
+  const joined = concatPlan(text);
+  if (joined) {
+    const decided = {
+      mode: "B",
+      why: "concat",
+      display: "Concatenate the files in this directory into concatenated.txt.",
+      cmd: joined.steps[0].cmd,
+      plan: joined,
+      needsModel: false,
+    };
+    decided.reason = "One Python command joins the files here. Nothing runs until you approve.";
+    return decided;
+  }
   const pick = pickMode(text, context, null);
   const math = heuristicMath(text);
   const direct = heuristicDirect(text);
@@ -1495,6 +1622,22 @@ function runUnitTests() {
   check("intro is not the answer", thinAnswer({ display: "Here is a simple C program that prints 'hello world':", cmd: null, plan: null }));
   check("markup keeps the words", presentMarkup("prints hello", "```md\n- prints hello\n```") === "- prints hello");
   check("markup ignores a lecture", presentMarkup("prints hello", "Make the answer easier to read. Do not add facts.") === "prints hello");
+  const joined = localTurn("concatenate all files in a directory", "");
+  check("concat is one python command", !joined.needsModel && /python3/.test(joined.cmd || "") && /concatenated\.txt/.test(joined.cmd || ""));
+  const vague = localTurn("clean up my machine", "");
+  check("vague job warns", !!(vague.warning && /unsure/i.test(vague.warning.sign) && !vague.cmd));
+  const invented = settle("display information about this os", parseThink('{"reason":"need it","display":"I will ask.","cmd":"cat /proc/osversion"}', "os"));
+  check("invented path warns", !!(invented.warning && !invented.cmd));
+  const named = settle("read /tmp/data.txt", parseThink('{"reason":"need it","display":"I will read it.","cmd":"cat /tmp/data.txt"}', "read /tmp/data.txt"));
+  check("named file is sure", !named.warning && /data\.txt/.test(named.cmd || ""));
+  const wrongTool = settle("write a short python command to concatenate files", parseThink('{"reason":"ok","display":"I will join them.","cmd":"cat *.txt"}', "python"));
+  check("cat is not python", !!(wrongTool.warning && !wrongTool.cmd));
+  const script = settle("run this python", { reason: "ok", display: "import os\nprint(len(os.listdir('.')))", cmd: null, plan: null, failed: false });
+  check("script becomes one command", !!(script.cmd && /python3/.test(script.cmd) && /base64/.test(script.cmd) && !script.warning));
+  check("shown program is not run", !settle("write a python function named add", { reason: "ok", display: "def add(a, b):\n  return a + b", cmd: null, plan: null, failed: false }).cmd);
+  check("cut off warns", !!(settle("hello", { reason: "", display: "", cmd: null, plan: null, failed: true }).warning));
+  check("answer is kept under a goal", /Paris/.test(rememberAnswer("KEEP GOAL: capitals", "The capital is Paris")));
+  check("answer is not kept without a goal", rememberAnswer("", "The capital is Paris") === "");
   const parts = chunkText("one\ntwo\nthree\nfour", 8);
   check("chunks cover the text", parts.length >= 2 && parts.join("\n").includes("one") && parts.join("\n").includes("four"));
   check("read path from sed", readPathFromCmd("sed -n '1,160p' /home/user/local-loop/lib.js") === "/home/user/local-loop/lib.js");
@@ -1616,6 +1759,8 @@ module.exports = {
   parsePlan,
   parseThink,
   presentMarkup,
+  settle,
+  rememberAnswer,
   thinAnswer,
   copiedFromPrompt,
   USER_SCENARIOS,
