@@ -4,6 +4,7 @@ const os = require("os");
 const crypto = require("crypto");
 const express = require("express");
 const lib = require("./lib");
+const format = require("./public/format");
 
 const PORT = Number(process.env.PORT || 3847);
 const OLLAMA_HOST = (process.env.OLLAMA_HOST || "http://127.0.0.1:11434").replace(/\/$/, "");
@@ -282,7 +283,10 @@ app.post("/api/markup", async (req, res) => {
   if (!source) return res.json({ pretty: "" });
   try {
     const raw = await ollamaText(lib.SYSTEM_MARKUP, lib.clip(source, 4000), 600);
-    res.json({ pretty: lib.presentMarkup(source, raw) });
+    const shaped = format.formatAnswer(lib.presentMarkup(source, raw));
+    const local = format.formatAnswer(source);
+    const pretty = /```/.test(local) && !/```/.test(shaped) ? local : shaped;
+    res.json({ pretty: pretty });
   } catch (err) {
     res.json({ pretty: source, error: String(err.message || err) });
   }

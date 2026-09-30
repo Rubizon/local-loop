@@ -186,7 +186,10 @@ function addBlocks(host, text) {
 
 function renderMarkdown(md, host) {
   host.textContent = "";
-  const src = String(md || "").replace(/\r\n/g, "\n");
+  var src = String(md || "").replace(/\r\n/g, "\n");
+  src = src.replace(/```([a-zA-Z0-9+#]*)[ \t]+([^`\n]+)```/g, function (_m, lang, code) {
+    return "```" + lang + "\n" + code.trim() + "\n```";
+  });
   const re = /```([^\n`]*)\n([\s\S]*?)```/g;
   let last = 0;
   let match;
@@ -231,6 +234,12 @@ function dress(box, raw) {
   body.appendChild(read);
   body.appendChild(rawEl);
   renderMarkdown(text, read);
+  var shaped = window.LoopFormat && LoopFormat.formatAnswer ? LoopFormat.formatAnswer(text) : text;
+  if (shaped && shaped.trim() !== text.trim()) {
+    renderMarkdown(shaped, read);
+    toggle.hidden = false;
+    if (/```/.test(shaped)) status.hidden = true;
+  }
   let showRaw = false;
   function paint() {
     read.hidden = showRaw;
@@ -248,7 +257,9 @@ function dress(box, raw) {
   })
     .then(function (r) { return r.json(); })
     .then(function (data) {
-      const pretty = String((data && data.pretty) || text);
+      var modelText = String((data && data.pretty) || text);
+      var pretty = window.LoopFormat && LoopFormat.formatAnswer ? LoopFormat.formatAnswer(modelText) : modelText;
+      if (!/```/.test(pretty) && shaped && /```/.test(shaped)) pretty = shaped;
       if (pretty.trim() && pretty.trim() !== text.trim()) {
         renderMarkdown(pretty, read);
         toggle.hidden = false;

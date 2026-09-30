@@ -1865,6 +1865,8 @@ function runUnitTests() {
   check("scan lists then reads", !!(scanned && scanned.steps && /find /.test(scanned.steps[0].cmd) && scanned.steps[1].scan && /notes\.txt/.test(scanned.steps[1].do) && /currenc/i.test(scanned.scan.question)));
   check("scan refuses a pathless tree", !!(scanPlan("read the entire codebase and report currencies") || {}).missing);
   check("scan files stay under the root", listScanFiles("/tmp/shop/a.js\n/etc/passwd\n/tmp/shop/lib/b.js\n", "/tmp/shop", 60).length === 2);
+  check("java is a code block", /```java\npublic class HelloWorld \{\n {2}public static void main/.test(require("./public/format").formatAnswer('public class HelloWorld { public static void main(String[] args) { System.out.println("Hello, World!"); } }')));
+  check("for-loop keeps its header", /for \(int i = 0; i < n; i\+\+\) \{\n {2}sum \+= i;/.test(require("./public/format").formatAnswer("for (int i = 0; i < n; i++) { sum += i; }")));
   const quietWrite = heuristicCheck(
     { id: "1", do: "write out", expect: "file exists", attach: "paths" },
     { cmd: "touch out.txt", code: 0, stdout: "", stderr: "" },
