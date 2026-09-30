@@ -390,19 +390,43 @@ function heuristicPlan(text) {
   return null;
 }
 
+function reasonFor(decided) {
+  if (!decided) return "";
+  const steps = (decided.plan && decided.plan.steps) || [];
+  if (decided.needsModel && !steps.length) {
+    return "I don't already know a command for this, so I need the model before anything runs.";
+  }
+  if (steps.length > 1) {
+    return "This takes " + steps.length + " steps, and each command waits for you. " + steps.map((s) => s.do).join(". ") + ".";
+  }
+  const cmd = (steps[0] && steps[0].cmd) || decided.cmd || "";
+  if (/^ls\b/.test(cmd)) {
+    const where = (String(cmd).match(/\s(\/\S+)\s*$/) || [])[1] || "the current directory";
+    return "You want the names in " + where + ". After you approve, I'll show those names here.";
+  }
+  if (/open\(/.test(cmd)) return "This is one write. It waits for approval, and then I'll tell you the path.";
+  if (steps[0]) return "One step: " + steps[0].do + ". Nothing runs until you approve.";
+  if (cmd) return "One command, and it waits for your approval.";
+  return "";
+}
+
 function localTurn(text, context) {
   const pick = pickMode(text, context, null);
   const direct = heuristicDirect(text);
   if (pick.mode === "A") {
     if (direct && direct.cmd) {
-      return { mode: "A", why: pick.why, display: direct.display, cmd: direct.cmd, plan: null, needsModel: false };
+      const decided = { mode: "A", why: pick.why, display: direct.display, cmd: direct.cmd, plan: null, needsModel: false };
+      decided.reason = reasonFor(decided);
+      return decided;
     }
-    return { mode: "A", why: pick.why, display: "", cmd: null, plan: null, needsModel: true };
+    const decided = { mode: "A", why: pick.why, display: "", cmd: null, plan: null, needsModel: true };
+    decided.reason = reasonFor(decided);
+    return decided;
   }
   const plan = heuristicPlan(text);
   if (plan && plan.steps && plan.steps.length) {
     const cmd = plan.steps[0].cmd || null;
-    return {
+    const decided = {
       mode: "B",
       why: pick.why,
       display: "Plan: " + String(plan.goal || "").replace(/^KEEP GOAL:\s*/i, ""),
@@ -410,11 +434,17 @@ function localTurn(text, context) {
       plan: plan,
       needsModel: false,
     };
+    decided.reason = reasonFor(decided);
+    return decided;
   }
   if (direct && direct.cmd) {
-    return { mode: "A", why: pick.why, display: direct.display, cmd: direct.cmd, plan: null, needsModel: false };
+    const decided = { mode: "A", why: pick.why, display: direct.display, cmd: direct.cmd, plan: null, needsModel: false };
+    decided.reason = reasonFor(decided);
+    return decided;
   }
-  return { mode: "B", why: pick.why, display: "", cmd: null, plan: null, needsModel: true };
+  const decided = { mode: "B", why: pick.why, display: "", cmd: null, plan: null, needsModel: true };
+  decided.reason = reasonFor(decided);
+  return decided;
 }
 
 function angryLines(text) {
@@ -908,6 +938,10 @@ function runUnitTests() {
   const pdf = localTurn("go to /tmp and list all files create a pdf with the summary", "");
   check("speedrun pdf stays two steps", pdf.plan && pdf.plan.steps.length === 2 && pdf.plan.steps[0].cmd === "ls -la /tmp");
   check("speedrun chat asks the model", localTurn("what is 2+2", "").needsModel === true);
+  const thought = localTurn("go to /tmp and list all files", "");
+  check("reason before list", /names in \/tmp/.test(thought.reason) && !/KEEP GOAL|FACT:/.test(thought.reason));
+  const pdfThought = localTurn("go to /tmp and list all files create a pdf with the summary", "");
+  check("reason before steps", /2 steps/.test(pdfThought.reason) && /List \/tmp/.test(pdfThought.reason));
   const numbers = heuristicPlan('create a file "foo.txt" and write there number 0 -> 100 inside.');
   check(
     "numbers file command",
@@ -1071,6 +1105,7 @@ module.exports = {
   heuristicDirect,
   heuristicPlan,
   localTurn,
+  reasonFor,
   heuristicEmit,
   heuristicCheck,
   judge,

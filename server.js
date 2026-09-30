@@ -224,6 +224,7 @@ app.post("/api/turn", async (req, res) => {
       return res.json({
         mode: decided.mode,
         why: decided.why,
+        reason: decided.reason,
         display: decided.display,
         cmd: decided.cmd,
         plan: decided.plan,
@@ -236,7 +237,7 @@ app.post("/api/turn", async (req, res) => {
         "State:\n" + (context || "(empty)") + "\n\nUser:\n" + lib.clip(text, 2000),
         400
       ));
-      return res.json({ mode: "A", why: decided.why, display: parsed.display, cmd: parsed.cmd, context });
+      return res.json({ mode: "A", why: decided.why, reason: decided.reason, display: parsed.display, cmd: parsed.cmd, context });
     }
     const raw = await ollamaText(
       lib.SYSTEM_PLAN,
@@ -250,6 +251,7 @@ app.post("/api/turn", async (req, res) => {
       return res.json({
         mode: "A",
         why: decided.why,
+        reason: decided.reason,
         display: "I could not make a command for that.",
         cmd: null,
         context,
@@ -258,7 +260,8 @@ app.post("/api/turn", async (req, res) => {
     if (!display) display = "Plan: " + plan.goal.replace(/^KEEP GOAL:\s*/i, "");
     ledger = [];
     lastGoodStep = null;
-    res.json({ mode: "B", why: decided.why, display, plan, context });
+    const packed = { mode: "B", plan: plan, needsModel: false, cmd: plan.steps[0] && plan.steps[0].cmd };
+    res.json({ mode: "B", why: decided.why, reason: lib.reasonFor(packed), display, plan, context });
   } catch (err) {
     res.status(500).json({ error: String(err.message || err) });
   }

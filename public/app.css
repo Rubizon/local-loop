@@ -95,6 +95,19 @@ main {
 @media (prefers-reduced-motion: reduce) {
   .dots i { animation: none; opacity: .8; }
 }
+.reason {
+  margin: 0 0 12px;
+  padding: 2px 0 2px 10px;
+  border-left: 2px solid #3f3f46;
+  color: var(--muted);
+  font-size: 14px;
+}
+.reason-k {
+  font-size: 11px;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  margin-bottom: 4px;
+}
 .plan {
   margin-top: 10px;
   border: 1px solid var(--line);

@@ -101,6 +101,23 @@ function addMsg(role, text, quiet) {
   return { div: div, body: body, event: event };
 }
 
+function showReason(box, text) {
+  if (!box || !text) return;
+  const el = document.createElement("div");
+  el.className = "reason";
+  const k = document.createElement("div");
+  k.className = "reason-k";
+  k.textContent = "Reasoning";
+  const p = document.createElement("div");
+  p.textContent = text;
+  el.appendChild(k);
+  el.appendChild(p);
+  const body = box.querySelector(".body");
+  if (body) box.insertBefore(el, body);
+  else box.appendChild(el);
+  note("reason", text);
+}
+
 function actionTitle(step) {
   const text = String((step && step.do) || "");
   if (/pdf/i.test(text)) return "Create PDF";
@@ -504,6 +521,7 @@ async function turn() {
       return {};
     });
     if (!r.ok) throw new Error(data.error || "HTTP " + r.status);
+    showReason(pending.div, data.reason);
     pending.body.textContent = (data.display || "(no text)").trim();
     if (pending.event) pending.event.text = clipText(pending.body.textContent, 4000);
     renderContext(data.context);
