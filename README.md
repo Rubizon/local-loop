@@ -12,6 +12,8 @@ A simple question gets an answer. A task that needs the machine becomes one comm
 
 The page is meant for small jobs on the machine in front of you: read a file, list a directory, write a text file, join the files in the working directory, make a small PDF from names already in State.
 
+A whole tree is a scan, not one prompt full of source. Ask it to read a directory and say what to look for, for example how currencies are handled. You approve the file list (60 files, skipping `node_modules`, `.git`, and `dist`). You approve the scan once. It reads each file, appends a note to a `.txt` in the working directory, and shows a summary here. State keeps the count and the path of that file, not the source. A file over about 12k characters is clipped to its start and end. Binary files and files over 400k are skipped.
+
 ## What it is not
 
 - Not Cursor, Cline, Aider, or OpenHands. It does not edit a repository, open a pull request, or work through a codebase.

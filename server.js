@@ -402,6 +402,96 @@ app.post("/api/add", async (req, res) => {
   }
 });
 
+function readScanText(file) {
+  let st;
+  try {
+    st = fs.statSync(file);
+  } catch (_) {
+    return null;
+  }
+  if (!st.isFile() || st.size > 400000 || st.size === 0) return null;
+  const head = Buffer.alloc(Math.min(st.size, 800));
+  const fd = fs.openSync(file, "r");
+  fs.readSync(fd, head, 0, head.length, 0);
+  fs.closeSync(fd);
+  if (head.includes(0)) return null;
+  const text = fs.readFileSync(file, "utf8");
+  if (text.length <= 12000) return { text: text, clipped: false };
+  return { text: text.slice(0, 8000) + "\n…\n" + text.slice(-3000), clipped: true };
+}
+
+app.post("/api/scan", async (req, res) => {
+  try {
+    const spec = (req.body && req.body.plan && req.body.plan.scan) || {};
+    const root = path.resolve(String(spec.root || ""));
+    const allowed = CWD_ALLOW.some((dir) => root === dir || root.startsWith(dir + path.sep));
+    if (!allowed || root.includes("..")) return res.status(400).json({ error: "directory not allowed" });
+    const listPath = path.join(sessionCwd, "file-list.txt");
+    if (!fs.existsSync(listPath)) return res.status(400).json({ error: "file-list.txt is missing. Approve the list first." });
+    const files = lib.listScanFiles(fs.readFileSync(listPath, "utf8"), root, spec.maxFiles || 60);
+    const outName = path.basename(String(spec.outName || "scan-notes.txt")).replace(/[^A-Za-z0-9._-]/g, "") || "scan-notes.txt";
+    const outAbs = path.join(sessionCwd, outName);
+    const question = lib.clip(spec.question || "What does this file do?", 200);
+    fs.writeFileSync(outAbs, "Question: " + question + "\nRoot: " + root + "\n");
+    const hits = [];
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      saveContext(
+        [
+          "KEEP GOAL: " + question,
+          "NEXT: file " + (i + 1) + " of " + files.length + " — " + file,
+          "FACT: writing " + outAbs,
+        ].join("\n")
+      );
+      let note = "none";
+      try {
+        const body = readScanText(file);
+        if (!body) note = "skipped (empty, binary, or too large)";
+        else {
+          const raw = await ollamaText(
+            lib.SYSTEM_SCAN,
+            "Question: " + question + "\nFile: " + file + (body.clipped ? "\nThis is the start and the end, not the whole file." : "") + "\n\n" + body.text,
+            140
+          );
+          note = String(lib.extractJson(raw).note || "").trim() || "none";
+          if (body.clipped && !/clipped/i.test(note)) note += " (file was clipped)";
+        }
+      } catch (err) {
+        note = "could not read: " + lib.clip(String(err.message || err), 80);
+      }
+      fs.appendFileSync(outAbs, "\n## " + file + "\n" + note + "\n");
+      if (!/^none\b/i.test(note) && !/^skipped\b/i.test(note)) hits.push(path.basename(file) + ": " + lib.clip(note, 160));
+    }
+    const report = fs.readFileSync(outAbs, "utf8");
+    let say = "";
+    try {
+      say = await reduceReport(question, report, 0, function (index, total, notes) {
+        saveContext(lib.progressState(question, index, total, notes));
+      });
+    } catch (_) {
+      say = "";
+    }
+    if (!say) {
+      say = hits.length
+        ? hits.slice(0, 12).join("\n")
+        : "Read " + files.length + " files. None of them had anything on that question.";
+    }
+    say = "Notes: " + outAbs + "\nFiles: " + files.length + "\n\n" + say;
+    const context = lib.clipContext(
+      [
+        "KEEP GOAL: " + question,
+        "FACT: notes in " + outAbs + " (" + files.length + " files, " + hits.length + " hits)",
+        "NEXT: waiting for a new instruction",
+        "DONE: scanned " + root,
+      ].join("\n")
+    );
+    saveContext(context);
+    res.json({ say: say, out: outAbs, files: files.length, hits: hits.length, context: context });
+  } catch (err) {
+    res.status(500).json({ error: String(err.message || err) });
+  }
+});
+
 app.post("/api/apply", async (req, res) => {
   try {
     const cmd = String((req.body && req.body.cmd) || "").trim();

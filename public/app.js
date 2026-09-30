@@ -504,7 +504,24 @@ function renderPlan(host) {
   const step = plan.steps && plan.steps[plan.cursor];
   const finished = plan.steps && plan.steps.length && plan.steps.every(function (s) { return s.status === "ok"; });
   const items = [];
-  if (!finished && step && step.cmd) {
+  if (!finished && step && step.scan) {
+    const title = document.createElement("div");
+    title.className = "plan-h";
+    title.textContent = "Read every listed file";
+    wrap.appendChild(title);
+    const pre = document.createElement("pre");
+    pre.className = "cmd";
+    pre.textContent = "For each path in file-list.txt, append a note to the text file. One approval covers the whole set.";
+    wrap.appendChild(pre);
+    items.push({
+      label: "Approve the scan",
+      ok: true,
+      fn: function () {
+        runScan(host);
+      },
+    });
+    setHold("This reads every listed file. State shows which file is open.");
+  } else if (!finished && step && step.cmd) {
     const title = document.createElement("div");
     title.className = "plan-h";
     title.textContent = actionTitle(step);
@@ -674,12 +691,55 @@ async function checkpoint(result, host) {
     }
     renderPlan(host);
     const nxt = plan && plan.steps && plan.steps[plan.cursor];
-    if (nxt && !nxt.cmd && nxt.status !== "ok") await runPlanStep(host);
+    if (nxt && !nxt.cmd && !nxt.scan && nxt.status !== "ok") await runPlanStep(host);
   } catch (e) {
     addMsg("err", e.name === "AbortError" ? "Stopped. The output summary took longer than 4 minutes." : e.message);
     renderPlan(host);
   } finally {
     clearTimeout(timer);
+    watch = false;
+    clearInterval(poll);
+    setBusy(false);
+  }
+}
+
+async function runScan(host) {
+  setBusy(true, "Reading files");
+  let watch = true;
+  const poll = setInterval(function () {
+    fetch("/api/state")
+      .then(function (r) { return r.json(); })
+      .then(function (s) {
+        if (!watch || !s) return;
+        renderContext(s.context || "");
+        const next = String(s.context || "").split("\n").find(function (l) { return /^NEXT:/.test(l); });
+        if (next) setBusy(true, next.replace(/^NEXT:\s*/, ""));
+      })
+      .catch(function () {});
+  }, 800);
+  try {
+    const r = await fetch("/api/scan", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ plan: plan }),
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || "scan failed");
+    if (d.context) renderContext(d.context);
+    if (plan && plan.steps) {
+      plan.steps.forEach(function (s) {
+        if (s.scan || /summar/i.test(s.do || "")) s.status = "ok";
+      });
+      plan.cursor = plan.steps.length;
+    }
+    const box = addMsg("bot", d.say || "Scan finished.");
+    dress(box, d.say || "");
+    note("loop", d.say || "");
+    renderPlan(host);
+    setHold("Done. Waiting for the next instruction.");
+  } catch (e) {
+    addMsg("err", e.message);
+  } finally {
     watch = false;
     clearInterval(poll);
     setBusy(false);

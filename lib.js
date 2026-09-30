@@ -65,6 +65,11 @@ Use short paragraphs and bullet lists.
 Put code in a fenced block with a language tag.
 Do not start with "Here is".`;
 
+const SYSTEM_SCAN = `You read one source file. JSON only. The first character is {.
+{"note":"one or two sentences"}
+Answer only the question. If this file does not bear on it, the note is "none".
+Do not paste code. Do not invent behavior that is not in the text.`;
+
 const MODEL_PROBE_USER = 'Reply with JSON only: {"display":"PING-OK","cmd":null}';
 
 function chunkText(text, size) {
@@ -454,6 +459,60 @@ function fileWritePlan(text) {
   };
 }
 
+function shellQuote(p) {
+  return "'" + String(p || "").replace(/'/g, "'\\''") + "'";
+}
+
+function scanQuestion(text) {
+  let q = String(text || "");
+  q = q.replace(/output appended[\s\S]*$/i, "");
+  q = q.replace(/\bthen summarized[\s\S]*$/i, "");
+  q = q.replace(/\s+/g, " ").trim();
+  const m = q.match(/\b(how|where|what|which|whether)\b.{0,160}/i);
+  return clip((m ? m[0] : q).trim(), 200);
+}
+
+function scanPlan(text) {
+  const t = String(text || "").trim();
+  const wantsTree = /\b(read|scan|review|walk)\b/i.test(t) && /\b(code\s*base|codebase|catalog|directory|folder|tree)\b/i.test(t);
+  const wantsEach = /\b(read|scan|review|report)\b/i.test(t) && /\b(each file|every file|all (the )?files)\b/i.test(t) && /\b(under|in)\b/i.test(t);
+  if (!wantsTree && !wantsEach) return null;
+  const pathM = t.match(/(\/[A-Za-z0-9._/-]+)/);
+  if (!pathM) return { missing: true };
+  const root = pathM[1].replace(/[.,;:]+$/, "");
+  if (/[;&|`$<>]/.test(root) || root.includes("..")) return { missing: true };
+  const outM = t.match(/([A-Za-z0-9._-]+\.txt)/);
+  const outName = outM && outM[1] !== "file-list.txt" ? outM[1] : "scan-notes.txt";
+  const question = scanQuestion(t);
+  const cmd = "find " + shellQuote(root) + " -type f ! -path '*/node_modules/*' ! -path '*/.git/*' ! -path '*/dist/*' -print | head -n 60 > file-list.txt; wc -l < file-list.txt";
+  return {
+    goal: "KEEP GOAL: " + (question || clip(t, 160)),
+    ask: clip(t, 240),
+    scan: { root: root, question: question, outName: outName, maxFiles: 60 },
+    cursor: 0,
+    steps: [
+      { id: "1", do: "List up to 60 files under " + root, need: "", expect: "file-list.txt", attach: "paths", cmd: cmd, status: "todo" },
+      { id: "2", do: "Read each file and append a note to " + outName, need: "file-list.txt", expect: outName + " written", attach: "paths", cmd: null, scan: true, status: "todo" },
+      { id: "3", do: "Summarize " + outName + " here", need: outName, expect: "a short summary", attach: "summary", cmd: null, status: "todo" },
+    ],
+  };
+}
+
+function listScanFiles(text, root, max) {
+  const base = path.resolve(String(root || "."));
+  const prefix = base.endsWith(path.sep) ? base : base + path.sep;
+  const cap = max || 60;
+  const out = [];
+  String(text || "").split("\n").forEach((line) => {
+    const raw = line.trim();
+    if (!raw || out.length >= cap) return;
+    const abs = path.resolve(raw);
+    if (abs !== base && !abs.startsWith(prefix)) return;
+    if (!out.includes(abs)) out.push(abs);
+  });
+  return out;
+}
+
 function heuristicPlan(text) {
   const t = String(text || "").trim();
   const written = fileWritePlan(t);
@@ -693,6 +752,30 @@ function reasonFor(decided) {
 }
 
 function localTurn(text, context) {
+  const scan = scanPlan(text);
+  if (scan && scan.missing) {
+    return {
+      mode: "A",
+      why: "scan",
+      display: "I am unsure what I am doing here.",
+      reason: "A tree scan needs a directory.",
+      cmd: null,
+      plan: null,
+      needsModel: false,
+      warning: { sign: "I am unsure what I am doing here.", why: "Name the directory as an absolute path." },
+    };
+  }
+  if (scan && scan.steps) {
+    return {
+      mode: "B",
+      why: "scan",
+      display: "I will list up to 60 files under " + scan.scan.root + ", append a note on each to " + scan.scan.outName + ", then summarize that file here.",
+      reason: "One approval lists the files. A second approval reads them all. State keeps the count, not the source.",
+      cmd: scan.steps[0].cmd,
+      plan: scan,
+      needsModel: false,
+    };
+  }
   const vague = vagueJob(text);
   if (vague) {
     return {
@@ -1778,6 +1861,10 @@ function runUnitTests() {
   check("cut off warns", !!(settle("hello", { reason: "", display: "", cmd: null, plan: null, failed: true }).warning));
   check("answer is kept under a goal", /Paris/.test(rememberAnswer("KEEP GOAL: capitals", "The capital is Paris")));
   check("answer is not kept without a goal", rememberAnswer("", "The capital is Paris") === "");
+  const scanned = scanPlan("read the entire code base under /tmp/shop and report each how the currencies are handled output appended in a single notes.txt file and then summarized here at the end");
+  check("scan lists then reads", !!(scanned && scanned.steps && /find /.test(scanned.steps[0].cmd) && scanned.steps[1].scan && /notes\.txt/.test(scanned.steps[1].do) && /currenc/i.test(scanned.scan.question)));
+  check("scan refuses a pathless tree", !!(scanPlan("read the entire codebase and report currencies") || {}).missing);
+  check("scan files stay under the root", listScanFiles("/tmp/shop/a.js\n/etc/passwd\n/tmp/shop/lib/b.js\n", "/tmp/shop", 60).length === 2);
   const quietWrite = heuristicCheck(
     { id: "1", do: "write out", expect: "file exists", attach: "paths" },
     { cmd: "touch out.txt", code: 0, stdout: "", stderr: "" },
@@ -1901,6 +1988,7 @@ module.exports = {
   SYSTEM_SAY,
   SYSTEM_NOTE,
   SYSTEM_MARKUP,
+  SYSTEM_SCAN,
   MODEL_PROBE_USER,
   contextCharBudget,
   progressState,
@@ -1919,6 +2007,8 @@ module.exports = {
   parseDirect,
   parsePlan,
   parseThink,
+  scanPlan,
+  listScanFiles,
   presentMarkup,
   settle,
   rememberAnswer,
