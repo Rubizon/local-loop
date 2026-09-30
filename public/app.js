@@ -173,6 +173,12 @@ function addBlocks(host, text) {
     addPre(host, aligned.join("\n"));
     aligned = [];
   }
+  function isNameLine(line) {
+  const t = String(line || "").trim();
+  if (!t) return false;
+  if (/^(Directories|Files|Other)$/.test(t)) return true;
+  return t.indexOf(" ") === -1;
+}
   function isAligned(line) {
     return /\S {2,}\S/.test(line) && !/^#{1,4}\s/.test(line) && !/^\s*(?:[-*]|•)\s/.test(line);
   }
@@ -183,7 +189,7 @@ function addBlocks(host, text) {
       flushAligned();
       return;
     }
-    if (isAligned(line)) {
+    if (isAligned(line) || isNameLine(line)) {
       flushPara();
       flushList();
       aligned.push(line.replace(/\s+$/, ""));

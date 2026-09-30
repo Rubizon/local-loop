@@ -58,11 +58,8 @@ const SYSTEM_NOTE = `One JSON object. The first character is {.
 {"note":"one sentence of what this part adds"}
 Do not paste code.`;
 
-const SYSTEM_MARKUP = `Make the answer easier to read. Output markdown only. No JSON.
-The reader uses a monospace font. Align columns with spaces.
-Line up "key: value" so the values start in the same column.
-Put code in a fenced block with a language tag.
-Do not add facts. Do not start with "Here is".`;
+const SYSTEM_MARKUP = `Markdown only. Do not add or drop words.
+A list stays a list. Code stays a fenced block.`;
 
 const SYSTEM_SCAN = `You read one source file. JSON only. The first character is {.
 {"note":"one or two sentences"}
@@ -611,6 +608,16 @@ function copiedFromPrompt(userText, thought) {
   return false;
 }
 
+function needsMarkup(text) {
+  const s = String(text || "").trim();
+  if (!s || s.length > 500) return false;
+  const lines = s.split("\n").filter((l) => l.trim());
+  if (lines.length > 6) return false;
+  if (/```/.test(s)) return false;
+  if (/^(Directories|Files|Other)$/m.test(s)) return false;
+  return true;
+}
+
 function presentMarkup(raw, modelText) {
   const source = String(raw || "").trim();
   let s = String(modelText || "").trim();
@@ -622,7 +629,7 @@ function presentMarkup(raw, modelText) {
     if (!parsed._raw && typeof parsed.md === "string" && parsed.md.trim()) s = parsed.md.trim();
     else return source;
   }
-  if (!s || /Make the answer easier to read|Do not add facts/.test(s)) return source;
+  if (!s || /Markdown only|Do not add or drop words|Make the answer easier to read|Do not add facts/.test(s)) return source;
   return s;
 }
 
@@ -1846,7 +1853,9 @@ function runUnitTests() {
   check("copied sample is rejected", copiedFromPrompt("display information about this os", { reason: "I have not read the file the user named, so I cannot summarize it yet.", display: "I'll read the whole file.", cmd: "cat /tmp/lib.js" }));
   check("intro is not the answer", thinAnswer({ display: "Here is a simple C program that prints 'hello world':", cmd: null, plan: null }));
   check("markup keeps the words", presentMarkup("prints hello", "```md\n- prints hello\n```") === "- prints hello");
-  check("markup ignores a lecture", presentMarkup("prints hello", "Make the answer easier to read. Do not add facts.") === "prints hello");
+  check("markup ignores a lecture", presentMarkup("prints hello", "Markdown only. Do not add or drop words.") === "prints hello");
+  check("listing is not sent for markup", needsMarkup("Here is /tmp.\n\nDirectories\n" + "a\n".repeat(20)) === false);
+  check("a short sentence can be marked up", needsMarkup("2 plus 2 equals 4.") === true);
   const joined = localTurn("concatenate all files in a directory", "");
   check("concat is one python command", !joined.needsModel && /python3/.test(joined.cmd || "") && /concatenated\.txt/.test(joined.cmd || ""));
   const vague = localTurn("clean up my machine", "");
@@ -2017,6 +2026,7 @@ module.exports = {
   scanPlan,
   listScanFiles,
   presentMarkup,
+  needsMarkup,
   settle,
   rememberAnswer,
   thinAnswer,

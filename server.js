@@ -281,8 +281,9 @@ app.post("/api/markup", async (req, res) => {
   const text = String((req.body && req.body.text) || "");
   const source = text.trim();
   if (!source) return res.json({ pretty: "" });
+  if (!lib.needsMarkup(source)) return res.json({ pretty: format.formatAnswer(source), skipped: true });
   try {
-    const raw = await ollamaText(lib.SYSTEM_MARKUP, lib.clip(source, 4000), 600);
+    const raw = await ollamaText(lib.SYSTEM_MARKUP, source, 160);
     const shaped = format.formatAnswer(lib.presentMarkup(source, raw));
     const local = format.formatAnswer(source);
     const pretty = /```/.test(local) && !/```/.test(shaped) ? local : shaped;
