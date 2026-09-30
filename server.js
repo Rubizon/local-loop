@@ -231,37 +231,48 @@ app.post("/api/turn", async (req, res) => {
         context,
       });
     }
-    if (decided.mode === "A") {
-      const parsed = lib.parseDirect(await ollamaText(
-        lib.SYSTEM_A,
-        "State:\n" + (context || "(empty)") + "\n\nUser:\n" + lib.clip(text, 2000),
-        400
-      ));
-      return res.json({ mode: "A", why: decided.why, reason: decided.reason, display: parsed.display, cmd: parsed.cmd, context });
-    }
     const raw = await ollamaText(
-      lib.SYSTEM_PLAN,
-      "State:\n" + (context || "(empty)") + "\n\nUser:\n" + lib.clip(text, 2000),
+      lib.SYSTEM_THINK,
+      "User:\n" + lib.clip(text, 2000) + "\n\nState:\n" + (context || "(empty)"),
       500
     );
-    let plan = lib.parsePlan(raw, text);
-    let display = lib.cleanDisplay(lib.extractJson(raw).display, "");
-    if (!plan.steps.length) plan = null;
-    if (!plan) {
+    const thought = lib.parseThink(raw, text);
+    if (thought.plan && thought.plan.steps && thought.plan.steps.length) {
+      const cmd = thought.plan.steps[0].cmd;
+      if (cmd) {
+        try {
+          lib.assertSafeCmd(cmd);
+        } catch (err) {
+          return res.json({
+            mode: "A",
+            why: "model",
+            reason: thought.reason,
+            display: String(err.message || err),
+            cmd: null,
+            context,
+          });
+        }
+      }
+      ledger = [];
+      lastGoodStep = null;
       return res.json({
-        mode: "A",
-        why: decided.why,
-        reason: decided.reason,
-        display: "I could not make a command for that.",
-        cmd: null,
+        mode: "B",
+        why: "model",
+        reason: thought.reason,
+        display: thought.display || "Plan: " + String(thought.plan.goal || "").replace(/^KEEP GOAL:\s*/i, ""),
+        cmd: cmd,
+        plan: thought.plan,
         context,
       });
     }
-    if (!display) display = "Plan: " + plan.goal.replace(/^KEEP GOAL:\s*/i, "");
-    ledger = [];
-    lastGoodStep = null;
-    const packed = { mode: "B", plan: plan, needsModel: false, cmd: plan.steps[0] && plan.steps[0].cmd };
-    res.json({ mode: "B", why: decided.why, reason: lib.reasonFor(packed), display, plan, context });
+    return res.json({
+      mode: "A",
+      why: "model",
+      reason: thought.reason,
+      display: thought.display || (thought.failed ? lib.clip(raw, 500) : "I could not decide."),
+      cmd: null,
+      context,
+    });
   } catch (err) {
     res.status(500).json({ error: String(err.message || err) });
   }
@@ -430,7 +441,7 @@ app.post("/api/check", async (req, res) => {
       lastGoodStep = oks.length ? oks[oks.length - 1].id : lastGoodStep;
     }
     const ending = check.ok ? lib.endReport(nextPlan, result, sessionCwd) : null;
-    const say = lib.speak({
+    let say = lib.speak({
       ok: check.ok,
       done: !!ending,
       why: check.why,
@@ -439,6 +450,23 @@ app.post("/api/check", async (req, res) => {
       result: result,
       cwd: sessionCwd,
     });
+    if (plan && plan.fromModel && check.ok) {
+      try {
+        const raw = await ollamaText(
+          lib.SYSTEM_SAY,
+          [
+            "Task: " + (plan.ask || ""),
+            "Command: " + ((result && result.cmd) || ""),
+            "Output:\n" + lib.clip((result && result.stdout) || "", 2500),
+          ].join("\n\n"),
+          400
+        );
+        const said = lib.extractJson(raw).say;
+        if (typeof said === "string" && said.trim()) say = said.trim();
+      } catch (_) {
+        say = "I ran it, but I could not turn the output into a report.";
+      }
+    }
     saveContext(check.context);
     res.json({ check, plan: nextPlan, report: ending, say: say, done: !!ending, cwd: sessionCwd });
   } catch (err) {

@@ -40,6 +40,16 @@ const SYSTEM_REPLAN = `Revise remaining steps after a failed checkpoint. JSON on
 {"display":"one paragraph","steps":[{"id":"1","do":"action","need":"input","expect":"one line","attach":"none|paths|summary|full","cmd":"one command or null"}]}
 Keep finished work. 1-5 remaining steps. Do not repeat done steps.`;
 
+const SYSTEM_THINK = `Think, then one JSON object. The first character is {.
+{"reason":"what you need, and why","display":"one sentence","cmd":"one shell command or null"}
+If you have not seen the thing the user asked about, do not describe it. Put the read in cmd.
+Example: {"reason":"The file has not been read, so I cannot report it yet.","display":"I'll read it first.","cmd":"sed -n '1,160p' /tmp/notes.txt"}
+Question example: {"reason":"No file or command is needed.","display":"4","cmd":null}`;
+
+const SYSTEM_SAY = `Report the command output. JSON only. The first character is {.
+{"say":"plain sentences about what the output shows"}
+Use only the output. No KEEP, FACT, or NEXT.`;
+
 const MODEL_PROBE_USER = 'Reply with JSON only: {"display":"PING-OK","cmd":null}';
 
 function clip(s, n) {
@@ -390,12 +400,47 @@ function heuristicPlan(text) {
   return null;
 }
 
+function parseThink(raw, userText) {
+  const parsed = extractJson(raw);
+  if (parsed._raw) return { reason: "", display: "", cmd: null, plan: null, failed: true };
+  const reason = typeof parsed.reason === "string" ? parsed.reason.trim() : "";
+  const display = typeof parsed.display === "string" ? parsed.display.trim() : "";
+  let plan = null;
+  if (Array.isArray(parsed.steps) && parsed.steps.length) {
+    plan = parsePlan(raw, userText);
+    if (!plan.steps.length) plan = null;
+  }
+  const cmd = typeof parsed.cmd === "string" && parsed.cmd.trim() ? parsed.cmd.trim() : null;
+  if (!plan && cmd) {
+    plan = {
+      goal: "KEEP GOAL: " + clip(userText, 140),
+      ask: clip(userText, 200),
+      cursor: 0,
+      steps: [
+        {
+          id: "1",
+          do: display || "Run the command",
+          need: "",
+          expect: "the command output",
+          attach: "summary",
+          cmd: cmd,
+          status: "todo",
+        },
+      ],
+    };
+  }
+  if (plan) {
+    plan.fromModel = true;
+    plan.ask = clip(userText, 200);
+    if (!plan.steps[0].cmd && cmd) plan.steps[0].cmd = cmd;
+  }
+  return { reason, display, cmd: plan && plan.steps[0] ? plan.steps[0].cmd : cmd, plan, failed: false };
+}
+
 function reasonFor(decided) {
   if (!decided) return "";
   const steps = (decided.plan && decided.plan.steps) || [];
-  if (decided.needsModel && !steps.length) {
-    return "I don't already know a command for this, so I need the model before anything runs.";
-  }
+  if (decided.needsModel && !steps.length) return "";
   if (steps.length > 1) {
     return "This takes " + steps.length + " steps, and each command waits for you. " + steps.map((s) => s.do).join(". ") + ".";
   }
@@ -942,6 +987,14 @@ function runUnitTests() {
   check("reason before list", /names in \/tmp/.test(thought.reason) && !/KEEP GOAL|FACT:/.test(thought.reason));
   const pdfThought = localTurn("go to /tmp and list all files create a pdf with the summary", "");
   check("reason before steps", /2 steps/.test(pdfThought.reason) && /List \/tmp/.test(pdfThought.reason));
+  const readThought = parseThink(
+    '{"reason":"The file has not been read, so I cannot report it yet.","display":"I will read it first.","cmd":"sed -n \'1,80p\' /tmp/lib.js"}',
+    "read this file and report /tmp/lib.js"
+  );
+  check(
+    "model thinks of the read",
+    readThought.plan && readThought.plan.fromModel && /sed/.test(readThought.cmd) && /not been read/.test(readThought.reason) && !/don't already know/.test(readThought.reason)
+  );
   const numbers = heuristicPlan('create a file "foo.txt" and write there number 0 -> 100 inside.');
   check(
     "numbers file command",
@@ -1076,6 +1129,8 @@ module.exports = {
   SYSTEM_CHECK,
   SYSTEM_EMIT,
   SYSTEM_REPLAN,
+  SYSTEM_THINK,
+  SYSTEM_SAY,
   MODEL_PROBE_USER,
   clip,
   hasGoal,
@@ -1087,6 +1142,7 @@ module.exports = {
   extractJson,
   parseDirect,
   parsePlan,
+  parseThink,
   cleanDisplay,
   parseCheck,
   parseEmit,
