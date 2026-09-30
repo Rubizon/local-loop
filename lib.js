@@ -1229,6 +1229,14 @@ function endReport(plan, result, cwd) {
   return lines.join("\n");
 }
 
+function reportSay(say, reportText, ok, overContext, why) {
+  const report = String(reportText || "").trim();
+  if (report && ok) return report;
+  if (report) return report + "\n\nNot done. " + String(why || "").replace(/\.$/, "") + ".";
+  if (ok && overContext) return "The output was too large to report in one pass, and the summary failed.";
+  return String(say || "");
+}
+
 function speak(opts) {
   const result = (opts && opts.result) || {};
   const cmd = String(result.cmd || "").trim();
@@ -2177,6 +2185,8 @@ function runUnitTests() {
   check("summarize ls", /aider/.test(summarizeOutput("ls -la /tmp", "total 1\ndrwx aider")));
   const many = Array.from({ length: 20 }, (_, i) => "f" + i).join("\n");
   check("summarize ls caps", /\+8/.test(summarizeOutput("ls /tmp", many)) && summarizeOutput("ls /tmp", many).length < 200);
+  check("a quiet write is not too large", reportSay("Wrote /tmp/loop/foo.txt.", "", true, false, "") === "Wrote /tmp/loop/foo.txt.");
+  check("only a huge output says the summary failed", reportSay("That’s done.", "", true, true, "") === "The output was too large to report in one pass, and the summary failed.");
   check("a write is not a failed listing", judge({ do: "I will generate a list of workdays and save it to the file foo.txt.", expect: "the command output" }, { cmd: "date -d 'next monday' > foo.txt", code: 0, stdout: "", stderr: "" }).ok === true);
   check("an empty listing still fails", judge({ do: "List /tmp", expect: "names" }, { cmd: "ls -la /tmp", code: 0, stdout: "", stderr: "" }).ok === false);
   check("multi-line command is allowed", assertSafeCmd("printf '%s\\n' Monday Tuesday > days.txt\necho done").indexOf("\n") > 0);
@@ -2442,6 +2452,7 @@ module.exports = {
   shortListing,
   finishReport,
   endReport,
+  reportSay,
   speak,
   stepState,
   pdfBytes,

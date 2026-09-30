@@ -678,7 +678,7 @@ app.post("/api/check", async (req, res) => {
     const produced = programText(result && result.cmd, result && result.stdout, result && result.stderr);
     const overContext = produced.length > lib.contextCharBudget();
     const listing = /^ls\b/.test(String((result && result.cmd) || "").trim());
-    if (check.ok && !listing && ((plan && plan.fromModel) || overContext)) {
+    if (check.ok && !listing && produced.trim() && (overContext || (plan && plan.fromModel && produced.length > 1500))) {
       try {
         reportText = await reduceReport(plan.ask || plan.goal || (step && step.do) || "", produced, 0, function (index, total, notes) {
           const goal = (plan && (plan.ask || plan.goal)) || (step && step.do) || "";
@@ -737,10 +737,7 @@ app.post("/api/check", async (req, res) => {
       cwd: sessionCwd,
     });
     if (reportText && check.ok) say = reportText;
-    else if (reportText) say = reportText + "\n\nNot done. " + check.why;
-    else if (check.ok && !listing && ((plan && plan.fromModel) || overContext)) {
-      say = "The output was too large to report in one pass, and the summary failed.";
-    }
+    else say = lib.reportSay(say, reportText, check.ok, overContext, check.why);
     saveContext(check.context);
     res.json({ check, plan: nextPlan, report: ending, say: say, done: !!ending, cwd: sessionCwd });
   } catch (err) {
