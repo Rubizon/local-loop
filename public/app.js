@@ -511,6 +511,29 @@ if (input) {
   });
 }
 
+function shareButtons(host, text) {
+  const copy = document.createElement("button");
+  copy.type = "button";
+  copy.className = "ghost";
+  copy.textContent = "Copy report";
+  copy.onclick = function () {
+    const done = function () { copy.textContent = "Copied — paste it in the chat"; };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(done).catch(function () { downloadText("model-report.txt", text); });
+    } else {
+      downloadText("model-report.txt", text);
+      done();
+    }
+  };
+  const save = document.createElement("button");
+  save.type = "button";
+  save.className = "ghost";
+  save.textContent = "Download report";
+  save.onclick = function () { downloadText("model-report.txt", text); };
+  host.appendChild(copy);
+  host.appendChild(save);
+}
+
 function downloadText(filename, text) {
   const a = document.createElement("a");
   a.href = URL.createObjectURL(new Blob([text], { type: "text/plain;charset=utf-8" }));
@@ -552,18 +575,13 @@ if (testBtn)
       const lines = ["Model " + (listed.model || "")];
       if (saved.unit) lines.push("Unit " + saved.unit.passed + "/" + saved.unit.total);
       probes.forEach(function (c) {
-        lines.push((c.ok ? "ok" : "not ok") + "  " + (c.name || c.kind) + " — " + (c.detail || ""));
+        lines.push((c.ok ? "ok" : "not ok") + "  " + (c.kind || c.name) + " — " + (c.diagnosis || c.detail || ""));
       });
       const sane = probes.length && probes.every(function (c) { return c.ok; }) && saved.unit && saved.unit.ok;
       lines.push(sane ? "Sane enough for the workflow." : "Not sane enough for the workflow.");
-      lines.push("Report: " + (saved.file || "model-report.txt"));
+      lines.push("Copy the report and paste it in the chat.");
       box.body.textContent = lines.join("\n");
-      const btn = document.createElement("button");
-      btn.type = "button";
-      btn.className = "ghost";
-      btn.textContent = "Download report";
-      btn.onclick = function () { downloadText("model-report.txt", saved.report); };
-      box.div.appendChild(btn);
+      shareButtons(box.div, saved.report);
       downloadText("model-report.txt", saved.report);
     } catch (e) {
       box.body.textContent = e.message;

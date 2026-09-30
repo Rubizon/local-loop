@@ -42,7 +42,7 @@ button.ghost, button.send {
   padding: 6px 12px;
   cursor: pointer;
 }
-.msg button.ghost { display: inline-block; margin-top: 10px; }
+.msg button.ghost { display: inline-block; margin: 10px 8px 0 0; }
 main {
   flex: 1;
   min-height: 0;

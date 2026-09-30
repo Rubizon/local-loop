@@ -137,6 +137,7 @@ app.post("/api/model-test", async (req, res) => {
   try {
     for (const probe of probes) {
       try {
+        const started = Date.now();
         const raw = await ollamaText(probe.system, probe.user, probe.predict);
         checks.push({
           ...lib.scoreWorkflow(probe.kind, raw),
@@ -144,6 +145,8 @@ app.post("/api/model-test", async (req, res) => {
           raw,
           system: probe.system,
           user: probe.user,
+          ms: Date.now() - started,
+          predict: probe.predict,
         });
       } catch (err) {
         checks.push({
@@ -151,6 +154,7 @@ app.post("/api/model-test", async (req, res) => {
           kind: probe.kind,
           ok: false,
           detail: String(err.message || err),
+          diagnosis: "request failed: " + String(err.message || err),
           raw: "",
           system: probe.system,
           user: probe.user,

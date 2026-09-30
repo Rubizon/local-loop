@@ -579,6 +579,41 @@ function scoreModelReply(parsed, rawText) {
   return { ok: checks.every((c) => c.ok), passed: checks.filter((c) => c.ok).length, total: checks.length, checks, display: parsed && parsed.display };
 }
 
+function diagnoseReply(kind, raw) {
+  const trimmed = String(raw || "").trim();
+  const start = clip(trimmed.replace(/\s+/g, " "), 90);
+  if (!trimmed) return "empty reply";
+  const parsed = extractJson(trimmed);
+  if (parsed._raw) {
+    if (trimmed.includes("{") && !trimmed.includes("}")) return "JSON started but was cut off before }. Starts: " + start;
+    if (!trimmed.includes("{")) return "prose, no JSON object. Starts: " + start;
+    return "has { but it is not valid JSON. Starts: " + start;
+  }
+  const keys = Object.keys(parsed).filter((k) => k !== "_raw").join(", ") || "(none)";
+  if (kind === "direct") {
+    if (typeof parsed.display !== "string" || !parsed.display.trim()) return "JSON has no display. Keys: " + keys;
+    return "JSON display ok";
+  }
+  if (kind === "plan") {
+    const steps = Array.isArray(parsed.steps) ? parsed.steps : [];
+    if (!steps.length) return "JSON has no steps. Keys: " + keys;
+    if (steps.some((s) => !s || !String((s && (s.do || s.text)) || "").trim())) return "a step has no action";
+    return steps.length + " steps";
+  }
+  if (kind === "check") {
+    const flag = asOk(parsed.ok);
+    if (flag === null) return "JSON has no usable ok. Keys: " + keys;
+    return "ok is " + flag;
+  }
+  if (kind === "emit") {
+    const cmd = typeof parsed.cmd === "string" ? parsed.cmd.trim() : "";
+    const ask = typeof parsed.ask === "string" ? parsed.ask.trim() : "";
+    if (!cmd && !ask) return "JSON has neither cmd nor ask. Keys: " + keys;
+    return cmd ? "command: " + clip(cmd, 70) : "asks: " + clip(ask, 70);
+  }
+  return "unknown probe";
+}
+
 function formatReport(info) {
   const unit = (info && info.unit) || { passed: 0, total: 0, results: [] };
   const lines = [
@@ -587,9 +622,22 @@ function formatReport(info) {
     "cwd: " + ((info && info.cwd) || ""),
     "time: " + ((info && info.time) || ""),
     "",
-    "== unit ==",
-    unit.passed + "/" + unit.total,
+    "== diagnosis ==",
+    "Paste this report into the chat.",
   ];
+  const probes = info && info.probes ? info.probes : [];
+  if (!probes.length) lines.push("(no model probes)");
+  probes.forEach((p) => {
+    lines.push((p.ok ? "OK  " : "FAIL") + "  " + (p.kind || p.name || "probe") + " — " + (p.diagnosis || p.detail || ""));
+    const extra = [];
+    if (p.ms != null) extra.push(p.ms + " ms");
+    extra.push(String(p.raw || "").length + " chars");
+    if (p.predict) extra.push("predict " + p.predict);
+    lines.push("    " + extra.join(", "));
+  });
+  lines.push("");
+  lines.push("== unit ==");
+  lines.push(unit.passed + "/" + unit.total);
   const failed = (unit.results || []).filter((r) => !r.ok);
   if (!failed.length) lines.push("all unit checks passed");
   failed.forEach((r) => lines.push("FAIL " + r.name + " — " + (r.detail || "fail")));
@@ -597,7 +645,7 @@ function formatReport(info) {
     lines.push("");
     lines.push("== " + (p.kind || p.name || "probe") + " ==");
     lines.push("ok: " + !!p.ok);
-    lines.push("detail: " + (p.detail || ""));
+    lines.push("diagnosis: " + (p.diagnosis || p.detail || ""));
     lines.push("--- system ---");
     lines.push(String(p.system || ""));
     lines.push("--- user ---");
@@ -611,28 +659,36 @@ function formatReport(info) {
 }
 
 function scoreWorkflow(kind, raw) {
+  const diagnosis = diagnoseReply(kind, raw);
   const parsed = extractJson(raw);
-  if (parsed._raw) return { name: kind, ok: false, detail: "no JSON" };
-  if (kind === "direct") {
-    const ok = typeof parsed.display === "string" && parsed.display.trim().length > 0;
-    return { name: "Direct", ok, detail: ok ? "answers in JSON" : "missing display" };
-  }
-  if (kind === "plan") {
+  let name = kind;
+  let ok = false;
+  let detail = diagnosis;
+  if (parsed._raw) {
+    detail = diagnosis;
+  } else if (kind === "direct") {
+    name = "Direct";
+    ok = typeof parsed.display === "string" && parsed.display.trim().length > 0;
+    detail = ok ? "answers in JSON" : diagnosis;
+  } else if (kind === "plan") {
+    name = "Plan";
     const steps = Array.isArray(parsed.steps) ? parsed.steps : [];
-    const ok = steps.length >= 1 && steps.every((s) => s && String(s.do || s.text || "").trim());
-    return { name: "Plan", ok, detail: ok ? steps.length + " steps" : "missing steps" };
-  }
-  if (kind === "check") {
-    const ok = asOk(parsed.ok) !== null;
-    return { name: "Check", ok, detail: ok ? "can judge a step" : "missing ok" };
-  }
-  if (kind === "emit") {
+    ok = steps.length >= 1 && steps.every((s) => s && String(s.do || s.text || "").trim());
+    detail = ok ? steps.length + " steps" : diagnosis;
+  } else if (kind === "check") {
+    name = "Check";
+    ok = asOk(parsed.ok) !== null;
+    detail = ok ? "can judge a step" : diagnosis;
+  } else if (kind === "emit") {
+    name = "Emit";
     const cmd = typeof parsed.cmd === "string" && parsed.cmd.trim();
     const ask = typeof parsed.ask === "string" && parsed.ask.trim();
-    const ok = !!(cmd || ask);
-    return { name: "Emit", ok, detail: ok ? (cmd ? "returns a command" : "asks a question") : "missing command" };
+    ok = !!(cmd || ask);
+    detail = ok ? (cmd ? "returns a command" : "asks a question") : diagnosis;
+  } else {
+    detail = "unknown probe";
   }
-  return { name: kind, ok: false, detail: "unknown probe" };
+  return { name, ok, detail, diagnosis };
 }
 
 const WORKFLOW_PROBES = [
@@ -671,7 +727,9 @@ function runUnitTests() {
     unit: { passed: 1, total: 2, results: [{ name: "sample", ok: false, detail: "no" }] },
     probes: [{ kind: "direct", ok: false, detail: "no JSON", system: "SYS", user: "USER", raw: "hello" }],
   });
-  check("report export", /FAIL sample/.test(report) && /== direct ==/.test(report) && /--- raw ---\nhello/.test(report));
+  check("report export", /== diagnosis ==/.test(report) && /FAIL  direct — no JSON/.test(report) && /--- raw ---\nhello/.test(report));
+  check("diagnose prose", /prose/.test(scoreWorkflow("direct", "Hello there").diagnosis));
+  check("diagnose cut off", /cut off/.test(scoreWorkflow("check", '{"ok":true').diagnosis));
   check("empty model plan", parsePlan("cmd null", "create a file").steps.length === 0);
   check("no goal drops", finalizeRewrite("", "FACT: x", "hi") === "");
   check("heuristic rewrite skip", heuristicRewrite("", "ls /tmp", "list") === "");
