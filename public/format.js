@@ -12,7 +12,76 @@
     if (/^(for|while|if)\s*\(/.test(t) && /\{/.test(t)) return /\b(int|String|void)\b|System\.out/.test(t) ? "java" : "javascript";
     if (/public\s+class\s+\w+/.test(t) && (t.match(/[{;}]/g) || []).length >= 2) return "java";
     if (/#include\s*[<"]/.test(t) && /[{;}]/.test(t)) return "c";
+    if (/@echo\s+off\b/i.test(t) || (/\.bat\b/i.test(t) && /\b(setlocal|endlocal|exit\s+\/b)\b/i.test(t))) return "bat";
+    if (/^#!\/bin\/(bash|sh)\b/.test(t)) return "bash";
     return "";
+  }
+
+  function prettyBatch(src) {
+    var s = String(src || "").replace(/\s+/g, " ").trim();
+    var title = "";
+    var lead = s.match(/^([A-Za-z0-9_.-]+\.bat)\s+/i);
+    if (lead) {
+      title = lead[1];
+      s = s.slice(lead[0].length);
+    }
+    var lines = [];
+    var buf = "";
+    var quote = false;
+    var heldIf = false;
+    var starters = /^(?:@echo|setlocal|endlocal|set|if|for|goto|call|exit|echo|rem|pdfunite|pdftk|pdftotext)\b/i;
+    function flush() {
+      var bit = buf.trim();
+      if (bit) lines.push(bit);
+      heldIf = false;
+      buf = "";
+    }
+    for (var i = 0; i < s.length; i++) {
+      var c = s.charAt(i);
+      if (c === '"') {
+        quote = !quote;
+        buf += c;
+        continue;
+      }
+      if (!quote && c === "(") {
+        buf = buf.replace(/\s+$/, "") + " (";
+        flush();
+        continue;
+      }
+      if (!quote && c === ")") {
+        flush();
+        var rest = s.slice(i + 1);
+        var elseM = rest.match(/^\s*else\s*\(/i);
+        if (elseM) {
+          lines.push(") else (");
+          i += elseM[0].length;
+          continue;
+        }
+        lines.push(")");
+        continue;
+      }
+      if (!quote && (buf === "" || /\s$/.test(buf))) {
+        var rest2 = s.slice(i);
+        var word = (rest2.match(/^[A-Za-z@]+/) || [""])[0];
+        if (starters.test(rest2) && buf.trim()) {
+          var buildingIf = /^\s*if\b/i.test(buf) && buf.indexOf("(") === -1;
+          if (buildingIf && /^(set|echo)$/i.test(word) && !heldIf) heldIf = true;
+          else flush();
+        }
+      }
+      buf += c;
+    }
+    flush();
+    var pad = 0;
+    var out = lines.map(function (line) {
+      var t = line.trim();
+      var dedent = /^\)/.test(t);
+      var n = Math.max(0, pad - (dedent ? 1 : 0));
+      if (/\(\s*$/.test(t)) pad++;
+      if (dedent) pad = Math.max(0, pad - 1);
+      return "  ".repeat(n) + t;
+    }).join("\n");
+    return title ? ":: " + title + "\n" + out : out;
   }
 
   function prettyBraces(src) {
@@ -132,7 +201,7 @@
   }
 
   function fence(kind, code) {
-    var body = kind === "python" ? prettyPython(code) : prettyBraces(code);
+    var body = kind === "python" ? prettyPython(code) : kind === "bat" ? prettyBatch(code) : prettyBraces(code);
     return "```" + kind + "\n" + body + "\n```";
   }
 
@@ -140,8 +209,8 @@
     var raw = String(text || "").replace(/\r\n/g, "\n").trim();
     if (!raw || raw.indexOf("```") !== -1) return raw;
     var kind = codeKind(raw);
-    if (kind && /^(package|public|class|#include|int\s+main|def\s|function|const|let|for|while|if)\b/.test(raw)) return fence(kind, raw);
-    var at = raw.search(/\bpublic\s+class\b|\b#include\b|\bdef\s+\w+\s*\(|\bfunction\s+\w+\s*\(/);
+    if (kind === "bat" || (kind && /^(package|public|class|#include|int\s+main|def\s|function|const|let|for|while|if|#!\/bin)\b/.test(raw))) return fence(kind, raw);
+    var at = raw.search(/\bpublic\s+class\b|\b#include\b|\bdef\s+\w+\s*\(|\bfunction\s+\w+\s*\(|@echo\s+off\b|\S+\.bat\s+@echo/i);
     if (at > 0) {
       var prose = raw.slice(0, at).trim();
       var code = raw.slice(at).trim();
