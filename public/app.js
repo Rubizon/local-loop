@@ -46,8 +46,16 @@ function setText(el, v) {
 
 function setHold(text) {
   hold = text || "";
-  const note = document.querySelector("#chat .plan .next-note");
-  if (note) note.textContent = hold;
+  const notes = document.querySelectorAll("#chat .plan .next-note");
+  notes.forEach(function (note, i) {
+    note.textContent = i === notes.length - 1 ? hold : "";
+  });
+}
+
+function retireActions() {
+  document.querySelectorAll("#chat .rowbtns button").forEach(function (b) {
+    b.disabled = true;
+  });
 }
 
 function showSpinner(label) {
@@ -383,6 +391,7 @@ function rowBtns(host, items) {
 }
 
 function renderPending(host) {
+  retireActions();
   const old = host.querySelector(".plan");
   if (old) old.remove();
   if (!pendingA || !pendingA.cmd || pendingA.result) return;
@@ -457,6 +466,7 @@ async function rememberOutput() {
 }
 
 function renderPlan(host) {
+  retireActions();
   const old = host.querySelector(".plan");
   if (old) old.remove();
   if (!plan) return;
@@ -579,7 +589,7 @@ async function applyOne(cmd, stepId, host, after) {
     const term = document.createElement("div");
     term.className = "term";
     const text = (data.result.stdout || "") + (data.result.stderr ? "\n" + data.result.stderr : "");
-    term.textContent = "$ " + data.result.cmd + "  exit " + data.result.code;
+    term.textContent = "$ " + data.result.cmd + "  exit " + data.result.code + (data.result.code === 124 ? "  (stopped: no output or too long)" : "");
     if (text.trim()) {
       const more = document.createElement("button");
       more.type = "button";
@@ -742,6 +752,7 @@ async function turn() {
   const paths = attached.map(function (f) { return f.path; });
   const text = [typed, paths.length ? "Files:\n" + paths.join("\n") : ""].filter(Boolean).join("\n\n");
   if (!text || busy) return;
+  retireActions();
   setHold("");
   input.value = "";
   attached = [];

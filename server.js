@@ -2,7 +2,6 @@ const fs = require("fs");
 const path = require("path");
 const os = require("os");
 const crypto = require("crypto");
-const { exec } = require("child_process");
 const express = require("express");
 const lib = require("./lib");
 
@@ -64,37 +63,18 @@ function parseCd(cmd) {
 function runCommand(cmd, cwd, stepId) {
   const safe = lib.assertSafeCmd(cmd);
   const dest = cwd || sessionCwd;
-  const write = safe.match(/^echo\s+([\s\S]+?)\s*>\s*(\S+)$/);
-  if (write) {
-    const abs = path.isAbsolute(write[2]) ? write[2] : path.resolve(dest, write[2]);
-    const allowed = CWD_ALLOW.some((root) => abs === root || abs.startsWith(root + path.sep));
-    if (!allowed) throw new Error("write not allowed: " + abs);
-    const before = fs.existsSync(abs) ? fs.readFileSync(abs, "utf8") : null;
-    fs.mkdirSync(path.dirname(abs), { recursive: true });
-    fs.writeFileSync(abs, write[1].replace(/^["']|["']$/g, ""), "utf8");
-    if (stepId) lib.recordWrite(ledger, stepId, abs, before);
-    return Promise.resolve({ cmd: safe, cwd: dest, code: 0, stdout: "wrote " + abs, stderr: "" });
-  }
-  return new Promise((resolve) => {
-    exec(safe, { cwd: dest, timeout: 20000, maxBuffer: 500000, env: process.env }, (err, stdout, stderr) => {
-      let errText = String(stderr || "");
-      if (err && err.killed) errText = (errText ? errText + "\n" : "") + "Stopped after 20s.";
-      const result = {
-        cmd: safe,
-        cwd: dest,
-        code: err && Number.isFinite(err.code) ? err.code : err ? 1 : 0,
-        stdout: String(stdout || "").slice(0, 400000),
-        stderr: errText.slice(0, 80000),
-      };
-      if (stepId && /^zip\b/.test(safe) && result.code === 0) {
-        const out = (safe.match(/(\S+\.zip)/) || [])[1];
-        if (out) {
-          const abs = path.isAbsolute(out) ? out : path.resolve(dest, out);
-          lib.recordWrite(ledger, stepId, abs, null);
-        }
-      }
-      resolve(result);
+  const before = lib.snapDir(dest);
+  const named = lib.absoluteWrites(safe, dest).filter((abs) => {
+    const rootOk = CWD_ALLOW.some((root) => abs === root || abs.startsWith(root + path.sep));
+    return rootOk && !fs.existsSync(abs);
+  });
+  return lib.runGuarded(safe, dest).then((result) => {
+    const changes = lib.diffDir(dest, before);
+    named.forEach((abs) => {
+      if (fs.existsSync(abs) && !changes.some((c) => c.path === abs)) changes.push({ path: abs, before: null });
     });
+    if (stepId) changes.forEach((ch) => lib.recordWrite(ledger, stepId, ch.path, ch.before));
+    return result;
   });
 }
 

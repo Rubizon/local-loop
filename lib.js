@@ -1,5 +1,6 @@
 const path = require("path");
 const fs = require("fs");
+const { spawn } = require("child_process");
 
 const CONTEXT_MAX_CHARS = 1600;
 const CONTEXT_MAX_LINES = 12;
@@ -817,9 +818,7 @@ function judge(step, result, probe) {
     return { ok: false, why: stderr || "listing had no names", summary: "" };
   }
   if (failed) return { ok: false, why: stderr || "command failed", summary: "" };
-  if (!stdout.trim() && !/pdf|open\(|\.pdf|>\s*\S+/i.test(String((result && result.cmd) || ""))) {
-    return { ok: false, why: "command printed nothing", summary: "" };
-  }
+  if (!stdout.trim()) return { ok: true, why: "command finished", summary: summary || "" };
   return { ok: true, why: "command finished", summary: summary };
 }
 
@@ -1028,6 +1027,147 @@ function safeRelPath(p, root) {
   const prefix = root.endsWith(path.sep) ? root : root + path.sep;
   if (resolved !== root && !resolved.startsWith(prefix)) throw new Error("path escapes workspace");
   return resolved;
+}
+
+function snapDir(dir) {
+  const map = {};
+  let names = [];
+  try {
+    names = fs.readdirSync(dir);
+  } catch (_) {
+    return map;
+  }
+  names.forEach((name) => {
+    if (name.startsWith(".")) return;
+    const abs = path.join(dir, name);
+    let st;
+    try {
+      st = fs.statSync(abs);
+    } catch (_) {
+      return;
+    }
+    if (!st.isFile() || st.size > 200000) return;
+    try {
+      map[abs] = fs.readFileSync(abs, "utf8");
+    } catch (_) {}
+  });
+  return map;
+}
+
+function diffDir(dir, before) {
+  const changes = [];
+  let names = [];
+  try {
+    names = fs.readdirSync(dir);
+  } catch (_) {
+    return changes;
+  }
+  names.forEach((name) => {
+    if (name.startsWith(".")) return;
+    const abs = path.join(dir, name);
+    let st;
+    try {
+      st = fs.statSync(abs);
+    } catch (_) {
+      return;
+    }
+    if (!st.isFile() || st.size > 200000) return;
+    let now = "";
+    try {
+      now = fs.readFileSync(abs, "utf8");
+    } catch (_) {
+      return;
+    }
+    if (!Object.prototype.hasOwnProperty.call(before, abs)) changes.push({ path: abs, before: null });
+    else if (before[abs] !== now) changes.push({ path: abs, before: before[abs] });
+  });
+  return changes;
+}
+
+function absoluteWrites(cmd, cwd) {
+  const text = String(cmd || "");
+  const found = [];
+  const add = (p) => {
+    const abs = path.resolve(cwd || ".", p);
+    if (!found.includes(abs)) found.push(abs);
+  };
+  (text.match(/open\(['"]([^'"]+)['"]/g) || []).forEach((bit) => {
+    const m = bit.match(/open\(['"]([^'"]+)['"]/);
+    if (m) add(m[1]);
+  });
+  const redir = text.match(/(?:>>?)\s*([^\s;&|]+)/);
+  if (redir) add(redir[1]);
+  (text.match(/\/[A-Za-z0-9._/-]+\.(?:zip|pdf|txt|csv)/g) || []).forEach(add);
+  return found;
+}
+
+function runGuarded(cmd, cwd, opts) {
+  const idleMs = (opts && opts.idleMs) || 8000;
+  const hardMs = (opts && opts.hardMs) || 20000;
+  const maxOut = (opts && opts.maxOut) || 400000;
+  return new Promise((resolve) => {
+    let child;
+    try {
+      child = spawn("/bin/bash", ["-lc", String(cmd || "")], {
+        cwd: cwd || process.cwd(),
+        env: process.env,
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+    } catch (err) {
+      resolve({ cmd: cmd, cwd: cwd, code: 1, stdout: "", stderr: String(err.message || err), killed: false });
+      return;
+    }
+    let stdout = "";
+    let stderr = "";
+    let settled = false;
+    let killed = false;
+    let idle;
+    const stop = () => {
+      if (settled || killed) return;
+      killed = true;
+      try {
+        child.kill("SIGKILL");
+      } catch (_) {}
+    };
+    const arm = () => {
+      clearTimeout(idle);
+      idle = setTimeout(stop, idleMs);
+    };
+    const hard = setTimeout(stop, hardMs);
+    const finish = (code) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(idle);
+      clearTimeout(hard);
+      if (killed) {
+        const why = stdout.length > maxOut ? "Stopped. The output was too large." : "Stopped. No output, or it ran too long.";
+        stderr = (stderr ? stderr + "\n" : "") + why;
+      }
+      resolve({
+        cmd: cmd,
+        cwd: cwd,
+        code: killed ? 124 : code == null ? 1 : code,
+        stdout: stdout.slice(0, maxOut),
+        stderr: stderr.slice(0, 80000),
+        killed: killed,
+      });
+    };
+    arm();
+    child.stdout.on("data", (buf) => {
+      stdout += buf.toString();
+      if (stdout.length > maxOut) stop();
+      else arm();
+    });
+    child.stderr.on("data", (buf) => {
+      stderr += buf.toString();
+      arm();
+    });
+    child.on("error", (err) => {
+      stderr += String(err.message || err);
+      finish(1);
+    });
+    child.on("close", (code) => finish(code));
+  });
 }
 
 function recordWrite(ledger, stepId, abs, before) {
@@ -1638,6 +1778,27 @@ function runUnitTests() {
   check("cut off warns", !!(settle("hello", { reason: "", display: "", cmd: null, plan: null, failed: true }).warning));
   check("answer is kept under a goal", /Paris/.test(rememberAnswer("KEEP GOAL: capitals", "The capital is Paris")));
   check("answer is not kept without a goal", rememberAnswer("", "The capital is Paris") === "");
+  const quietWrite = heuristicCheck(
+    { id: "1", do: "write out", expect: "file exists", attach: "paths" },
+    { cmd: "touch out.txt", code: 0, stdout: "", stderr: "" },
+    "",
+    null
+  );
+  check("quiet success is ok", quietWrite.ok === true);
+  const dir = fs.mkdtempSync(path.join(require("os").tmpdir(), "loop-snap-"));
+  fs.writeFileSync(path.join(dir, "a.txt"), "one");
+  const before = snapDir(dir);
+  fs.writeFileSync(path.join(dir, "a.txt"), "two");
+  fs.writeFileSync(path.join(dir, "b.txt"), "new");
+  const changed = diffDir(dir, before);
+  check("new file is recorded", changed.some((c) => c.path.endsWith("b.txt") && c.before == null));
+  check("edit is recorded", changed.some((c) => c.path.endsWith("a.txt") && c.before === "one"));
+  const book = [];
+  changed.forEach((c) => recordWrite(book, "1", c.path, c.before));
+  rollbackAfter(book, null);
+  check("rollback restores the directory", fs.readFileSync(path.join(dir, "a.txt"), "utf8") === "one" && !fs.existsSync(path.join(dir, "b.txt")));
+  fs.rmSync(dir, { recursive: true, force: true });
+  check("absolute write is seen", absoluteWrites("python3 -c \"open('/tmp/tmp-summary.pdf','wb').write(b'x')\"", "/tmp").some((p) => p.endsWith("tmp-summary.pdf")));
   const parts = chunkText("one\ntwo\nthree\nfour", 8);
   check("chunks cover the text", parts.length >= 2 && parts.join("\n").includes("one") && parts.join("\n").includes("four"));
   check("read path from sed", readPathFromCmd("sed -n '1,160p' /home/user/local-loop/lib.js") === "/home/user/local-loop/lib.js");
@@ -1796,6 +1957,10 @@ module.exports = {
   safeRelPath,
   recordWrite,
   rollbackAfter,
+  snapDir,
+  diffDir,
+  absoluteWrites,
+  runGuarded,
   estimatePrompt,
   scoreModelReply,
   formatReport,
