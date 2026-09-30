@@ -614,6 +614,35 @@ function diagnoseReply(kind, raw) {
   return "unknown probe";
 }
 
+function formatSession(info) {
+  const lines = [
+    "local-loop session",
+    "model: " + ((info && info.model) || ""),
+    "cwd: " + ((info && info.cwd) || ""),
+    "time: " + ((info && info.time) || ""),
+    "",
+    "== events ==",
+  ];
+  const events = (info && info.events) || [];
+  if (!events.length) lines.push("(no conversation yet)");
+  events.slice(0, 200).forEach((e, i) => {
+    lines.push("");
+    lines.push("--- " + (i + 1) + " " + (e.kind || "note") + " " + (e.t || "") + " ---");
+    lines.push(clip(String(e.text || ""), 4000) || "(empty)");
+  });
+  lines.push("");
+  lines.push("== current state ==");
+  lines.push(String((info && info.state) || "").trim() || "(empty)");
+  if (info && info.plan) {
+    lines.push("");
+    lines.push("== current plan ==");
+    lines.push(clip(String(info.plan), 4000));
+  }
+  lines.push("");
+  lines.push("== end ==");
+  return lines.join("\n");
+}
+
 function formatReport(info) {
   const unit = (info && info.unit) || { passed: 0, total: 0, results: [] };
   const lines = [
@@ -730,6 +759,15 @@ function runUnitTests() {
   check("report export", /== diagnosis ==/.test(report) && /FAIL  direct — no JSON/.test(report) && /--- raw ---\nhello/.test(report));
   check("diagnose prose", /prose/.test(scoreWorkflow("direct", "Hello there").diagnosis));
   check("diagnose cut off", /cut off/.test(scoreWorkflow("check", '{"ok":true').diagnosis));
+  const session = formatSession({
+    model: "qwen",
+    cwd: "/tmp/loop-x",
+    time: "t",
+    events: [{ kind: "you", t: "t1", text: "write foo.txt" }, { kind: "state", t: "t2", text: "KEEP GOAL: write foo.txt" }],
+    state: "KEEP GOAL: write foo.txt",
+    plan: "1 [todo] Write foo.txt",
+  });
+  check("session export", /== events ==/.test(session) && /--- 1 you t1 ---/.test(session) && /write foo.txt/.test(session) && /== current plan ==/.test(session));
   check("empty model plan", parsePlan("cmd null", "create a file").steps.length === 0);
   check("no goal drops", finalizeRewrite("", "FACT: x", "hi") === "");
   check("heuristic rewrite skip", heuristicRewrite("", "ls /tmp", "list") === "");
@@ -841,6 +879,7 @@ module.exports = {
   estimatePrompt,
   scoreModelReply,
   formatReport,
+  formatSession,
   scoreWorkflow,
   WORKFLOW_PROBES,
   runUnitTests,

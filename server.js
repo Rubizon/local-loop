@@ -185,6 +185,25 @@ app.post("/api/model-report", (req, res) => {
   }
 });
 
+app.post("/api/export", (req, res) => {
+  try {
+    const body = req.body || {};
+    const report = lib.formatSession({
+      model: OLLAMA_MODEL,
+      cwd: sessionCwd,
+      time: new Date().toISOString(),
+      events: Array.isArray(body.events) ? body.events : [],
+      state: body.state,
+      plan: body.plan,
+    });
+    const file = path.join(sessionCwd, "session-report.txt");
+    fs.writeFileSync(file, report, "utf8");
+    res.json({ report, file });
+  } catch (err) {
+    res.status(500).json({ error: String(err.message || err) });
+  }
+});
+
 app.post("/api/prompt-stats", (req, res) => {
   const text = String((req.body && req.body.text) || "");
   const extra = String((req.body && req.body.extra) || "");

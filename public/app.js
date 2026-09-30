@@ -13,6 +13,29 @@ let pendingA = null;
 let plan = null;
 let check = null;
 let numCtx = 8192;
+const trace = [];
+
+function clipText(text, n) {
+  const s = String(text || "");
+  return s.length <= n ? s : s.slice(0, n) + "\n… " + (s.length - n) + " more characters";
+}
+
+function note(kind, text) {
+  const event = { t: new Date().toISOString(), kind: kind, text: clipText(text, 4000) };
+  trace.push(event);
+  if (trace.length > 200) trace.shift();
+  return event;
+}
+
+function planText(p) {
+  if (!p || !p.steps) return "";
+  const lines = [p.goal || ""];
+  p.steps.forEach(function (s) {
+    lines.push(s.id + " [" + (s.status || "todo") + "] " + (s.do || ""));
+    if (s.cmd) lines.push("  cmd: " + s.cmd);
+  });
+  return lines.join("\n");
+}
 
 function setText(el, v) {
   if (el) el.textContent = v;
@@ -58,7 +81,7 @@ function setBusy(on, label) {
   else hideSpinner();
 }
 
-function addMsg(role, text) {
+function addMsg(role, text, quiet) {
   const div = document.createElement("div");
   div.className = "msg " + role;
   const who = document.createElement("div");
@@ -69,12 +92,13 @@ function addMsg(role, text) {
   body.textContent = text;
   div.appendChild(who);
   div.appendChild(body);
+  const event = !quiet && text ? note(role === "user" ? "you" : role === "err" ? "error" : "loop", text) : null;
   if (chat) {
     chat.appendChild(div);
     if (busy) showSpinner();
     chat.scrollTop = chat.scrollHeight;
   }
-  return { div: div, body: body };
+  return { div: div, body: body, event: event };
 }
 
 function actionTitle(step) {
@@ -85,7 +109,10 @@ function actionTitle(step) {
 }
 
 function renderContext(text) {
-  context = String(text || "");
+  const next = String(text || "");
+  const changed = next !== context;
+  context = next;
+  if (changed) note("state", next);
   if (!ctxEl) return;
   ctxEl.innerHTML = "";
   const raw = context.trim();
@@ -365,6 +392,7 @@ async function applyOne(cmd, stepId, host, after) {
       term.appendChild(more);
     }
     host.appendChild(term);
+    note("command", "$ " + data.result.cmd + "  exit " + data.result.code + "\n" + text);
     if (after) await after(data.result);
   } finally {
     setBusy(false);
@@ -383,6 +411,8 @@ async function checkpoint(result, host) {
     if (!r.ok) throw new Error(d.error || "check failed");
     plan = d.plan;
     check = d.check;
+    note("check", (d.check && d.check.ok ? "ok — " : "not ok — ") + ((d.check && (d.check.why || d.check.diagnosis)) || ""));
+    note("plan", planText(plan));
     renderContext(d.check.context);
     if (d.report) addMsg("bot", d.report);
     const nextLine = String((d.check && d.check.context) || "").split("\n").find((l) => /^NEXT:/.test(l));
@@ -408,6 +438,7 @@ async function runPlanStep(host) {
       const d = await r.json();
       if (d.emit && d.emit.cmd) {
         step.cmd = d.emit.cmd;
+        note("plan", planText(plan));
         renderPlan(host);
         return;
       }
@@ -439,6 +470,7 @@ async function doReplan(startOver, host) {
     if (!r.ok) throw new Error(d.error || "replan failed");
     plan = d.plan;
     check = null;
+    note("plan", planText(plan));
     addMsg("bot", d.display || "Revised plan.");
     if (startOver && plan.goal) renderContext(plan.goal);
     renderPlan(host);
@@ -472,6 +504,7 @@ async function turn() {
     });
     if (!r.ok) throw new Error(data.error || "HTTP " + r.status);
     pending.body.textContent = (data.display || "(no text)").trim();
+    if (pending.event) pending.event.text = clipText(pending.body.textContent, 4000);
     renderContext(data.context);
     updateBudget();
     if (data.mode === "A") {
@@ -486,12 +519,14 @@ async function turn() {
       pendingA = null;
       plan = data.plan;
       check = null;
+      note("plan", planText(plan));
       renderPlan(pending.div);
     }
   } catch (e) {
     pending.div.className = "msg err";
     pending.body.textContent =
       e.name === "AbortError" ? "Timed out after 120s (Ollama busy or model not loaded)" : e.message;
+    if (pending.event) pending.event.text = clipText(pending.body.textContent, 4000);
   } finally {
     clearTimeout(timer);
     setBusy(false);
@@ -581,6 +616,7 @@ if (testBtn)
       lines.push(sane ? "Sane enough for the workflow." : "Not sane enough for the workflow.");
       lines.push("Copy the report and paste it in the chat.");
       box.body.textContent = lines.join("\n");
+      if (box.event) box.event.text = clipText(box.body.textContent, 4000);
       shareButtons(box.div, saved.report);
       downloadText("model-report.txt", saved.report);
     } catch (e) {
@@ -593,6 +629,25 @@ if (testBtn)
     }
   };
 
+var exportBtn = document.getElementById("export");
+if (exportBtn)
+  exportBtn.onclick = async function () {
+    const box = addMsg("bot", "Preparing the session report…", true);
+    try {
+      const r = await fetch("/api/export", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ events: trace, state: context, plan: planText(plan) }),
+      });
+      const data = await r.json();
+      if (!r.ok || !data.report) throw new Error(data.error || "export failed");
+      box.body.textContent = "Session report ready. Copy it and paste it in the chat.\n" + (data.file || "session-report.txt");
+      shareButtons(box.div, data.report);
+      downloadText("session-report.txt", data.report);
+    } catch (e) {
+      box.body.textContent = e.message;
+    }
+  };
 var clearBtn = document.getElementById("clear");
 if (clearBtn)
   clearBtn.onclick = async function () {
@@ -607,6 +662,7 @@ if (clearBtn)
     pendingA = null;
     plan = null;
     check = null;
+    note("clear", "cleared conversation and state");
     hold = "";
     busy = false;
     if (sendBtn) sendBtn.disabled = false;
