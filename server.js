@@ -243,6 +243,10 @@ app.post("/api/turn", async (req, res) => {
       if (!plan.steps.length) plan = null;
     }
     if (!plan) {
+      const direct = lib.heuristicDirect(text);
+      if (direct && direct.cmd) {
+        return res.json({ mode: "A", why: pick.why, display: direct.display, cmd: direct.cmd, context });
+      }
       return res.json({
         mode: "A",
         why: pick.why,

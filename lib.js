@@ -247,10 +247,15 @@ function applyAttach(how, cmd, result) {
 
 function heuristicDirect(text) {
   const t = String(text || "").trim();
-  if (/\/tmp/.test(t) && /(ls|list|show|go to)/i.test(t) && !/\b(then|and then|zip|csv|report)\b/i.test(t)) {
-    return { display: "List /tmp with one command.", cmd: "ls -la /tmp" };
+  if (/\b(pdf|zip|csv|xlsx|write|create|save)\b/i.test(t)) return null;
+  const abs = t.match(/(\/(?:tmp|home|var|usr|etc)(?:\/[A-Za-z0-9._-]*)*)/);
+  const wantsList = /\b(ls|list|show|files)\b/i.test(t) || /go to/i.test(t);
+  if (abs && wantsList && !/\b(then|and then|report)\b/i.test(t)) {
+    return { display: "List " + abs[1] + ".", cmd: "ls -la " + abs[1] };
   }
-  if (/^(ls|list(\s+files)?)\s*$/i.test(t)) return { display: "List the current directory.", cmd: "ls -la" };
+  if (/^(ls|list(\s+(all\s+)?files)?|list all files)\s*$/i.test(t)) {
+    return { display: "List the current directory.", cmd: "ls -la" };
+  }
   return null;
 }
 
@@ -330,6 +335,16 @@ function heuristicPlan(text) {
       steps: [
         { id: "1", do: "List /tmp", need: "", expect: "a directory listing with names", attach: "paths", cmd: "ls -la /tmp", status: "todo" },
         { id: "2", do: "Keep a short report of names", need: "step 1 names", expect: "a short name list", attach: "summary", cmd: null, status: "todo" },
+      ],
+    };
+  }
+  const direct = heuristicDirect(t);
+  if (direct && direct.cmd) {
+    return {
+      goal: "KEEP GOAL: " + direct.display.replace(/\.$/, ""),
+      cursor: 0,
+      steps: [
+        { id: "1", do: direct.display.replace(/\.$/, ""), need: "", expect: "names from the listing", attach: "summary", cmd: direct.cmd, status: "todo" },
       ],
     };
   }
@@ -743,6 +758,8 @@ function runUnitTests() {
   check("pickMode A", pickMode("what is 2+2", "").mode === "A");
   check("pickMode B", pickMode("list /tmp then zip a csv", "").mode === "B");
   check("pdf prompt is a plan", pickMode("go to /tmp and list all files create a pdf with the summary", "").mode === "B");
+  const listTmp = heuristicPlan("go to /tmp and list all files");
+  check("list /tmp has a command", listTmp && listTmp.steps.length === 1 && listTmp.steps[0].cmd === "ls -la /tmp");
   const numbers = heuristicPlan('create a file "foo.txt" and write there number 0 -> 100 inside.');
   check(
     "numbers file command",
