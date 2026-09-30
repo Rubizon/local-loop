@@ -72,9 +72,9 @@ button.icon-format {
   position: absolute;
   top: 4px;
   right: 4px;
-  z-index: 3;
-  width: 26px;
-  height: 26px;
+  z-index: 4;
+  width: 28px;
+  height: 28px;
   margin: 0;
   padding: 0;
   display: grid;
@@ -85,8 +85,9 @@ button.icon-format {
   color: #d4d4d4;
   opacity: 0;
   pointer-events: none;
+  transition: opacity .12s ease .35s;
 }
-button.icon-format { right: 34px; }
+button.icon-format { right: 36px; }
 .msg:hover > button.icon-copy,
 .msg:focus-within > button.icon-copy,
 .msg .body:hover > button.icon-copy,
@@ -104,13 +105,18 @@ button.icon-format { right: 34px; }
 .composer:hover > button.icon-copy,
 .composer:focus-within > button.icon-copy,
 aside:hover > button.icon-copy,
-aside:focus-within > button.icon-copy {
+aside:focus-within > button.icon-copy,
+button.icon-copy:hover,
+button.icon-copy:focus,
+button.icon-format:hover,
+button.icon-format:focus {
   opacity: 1;
   pointer-events: auto;
+  transition-delay: 0s;
 }
 button.icon-copy.done,
 button.icon-format.on { color: #fff; background: #3a3a3a; }
-.msg.user > button.icon-copy { top: 8px; left: -32px; right: auto; }
+.msg.user > button.icon-copy { top: 6px; right: 6px; left: auto; }
 .term > button.icon-copy,
 .codebox > button.icon-copy { top: 6px; right: 6px; }
 .msg .body { position: relative; }

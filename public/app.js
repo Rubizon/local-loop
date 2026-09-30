@@ -663,14 +663,18 @@ function renderPending(host) {
     {
       label: "Approve",
       ok: true,
-      fn: async function () {
-        enqueueLlm("approve:" + (pendingA && pendingA.cmd), "Running", function () {
-          return applyOne(pendingA.cmd, null, host, function (result) {
-            pendingA.result = result;
+      fn: function () {
+        const job = pendingA;
+        if (!job || !job.cmd) return;
+        retireActions();
+        enqueueLlm("approve:" + job.cmd, "Running", function () {
+          return applyOne(job.cmd, null, host, function (result) {
+            job.result = result || { cmd: job.cmd, code: 1, stdout: "", stderr: "" };
+            pendingA = job;
             return rememberOutput();
           });
         }).catch(function (e) {
-          addMsg("err", e.message);
+          addMsg("err", e && e.message ? e.message : "The command failed.");
         });
       },
     },
@@ -850,13 +854,15 @@ async function applyOne(cmd, stepId, host, after) {
     });
     const data = await r.json();
     if (!r.ok) throw new Error(data.error || "apply failed");
+    const ran = data && data.result;
+    if (!ran) throw new Error((data && data.error) || "The command finished without a result.");
     const term = document.createElement("div");
     term.className = "term";
-    const text = (data.result.stdout || "") + (data.result.stderr ? "\n" + data.result.stderr : "");
-    const full = "$ " + data.result.cmd + "  exit " + data.result.code + (data.result.code === 124 ? "  (stopped: no output or too long)" : "") + (text.trim() ? "\n" + text : "");
+    const text = (ran.stdout || "") + (ran.stderr ? "\n" + ran.stderr : "");
+    const full = "$ " + (ran.cmd || cmd) + "  exit " + ran.code + (ran.code === 124 ? "  (stopped: no output or too long)" : "") + (text.trim() ? "\n" + text : "");
     const pre = document.createElement("pre");
     pre.className = "native";
-    pre.textContent = "$ " + data.result.cmd + "  exit " + data.result.code + (data.result.code === 124 ? "  (stopped: no output or too long)" : "");
+    pre.textContent = "$ " + (ran.cmd || cmd) + "  exit " + ran.code + (ran.code === 124 ? "  (stopped: no output or too long)" : "");
     term.appendChild(pre);
     term.appendChild(copyBtn(full));
     if (text.trim()) {
@@ -871,8 +877,8 @@ async function applyOne(cmd, stepId, host, after) {
       term.appendChild(more);
     }
     host.appendChild(term);
-    note("command", "$ " + data.result.cmd + "  exit " + data.result.code + "\n" + text);
-    if (after) await after(data.result);
+    note("command", "$ " + (ran.cmd || cmd) + "  exit " + ran.code + "\n" + text);
+    if (after) await after(ran);
   } finally {
     setBusy(false);
   }

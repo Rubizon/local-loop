@@ -659,7 +659,7 @@ function parseThink(raw, userText) {
       ],
     };
   }
-  if (plan) {
+  if (plan && plan.steps && plan.steps[0]) {
     plan.fromModel = true;
     plan.ask = clip(userText, 200);
     if (!plan.steps[0].cmd && cmd) plan.steps[0].cmd = cmd;
@@ -1094,9 +1094,10 @@ function endReport(plan, result, cwd) {
     const zip = text.match(/\bzip\s+(\S+\.zip)\b/);
     if (zip) add(zip[1]);
   };
-  steps.forEach((s) => fromCmd(s.cmd));
-  fromCmd(result && result.cmd);
+  steps.forEach((s) => { if (s) fromCmd(s.cmd); });
+  if (result) fromCmd(result.cmd);
   steps.forEach((s) => {
+    if (!s) return;
     const m = String(s.note || "").match(/pdf:\s*(\S+)/);
     if (m) add(m[1]);
   });
