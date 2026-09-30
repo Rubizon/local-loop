@@ -378,13 +378,12 @@ async function applyOne(cmd, stepId, host, after) {
     const term = document.createElement("div");
     term.className = "term";
     const text = (data.result.stdout || "") + (data.result.stderr ? "\n" + data.result.stderr : "");
-    const lines = text.split("\n");
-    const shown = lines.length > 18 ? lines.slice(0, 18).join("\n") + "\n… " + (lines.length - 18) + " more lines" : text;
-    term.textContent = "$ " + data.result.cmd + "  exit " + data.result.code + "\n" + shown;
-    if (lines.length > 18) {
+    const isList = /^ls\b/.test(String(data.result.cmd || "").trim());
+    term.textContent = "$ " + data.result.cmd + "  exit " + data.result.code + (isList ? "" : "\n" + (text.split("\n").length > 18 ? text.split("\n").slice(0, 18).join("\n") + "\n… " + (text.split("\n").length - 18) + " more lines" : text));
+    if (isList || text.split("\n").length > 18) {
       const more = document.createElement("button");
       more.type = "button";
-      more.textContent = "Show the full output";
+      more.textContent = isList ? "Show the raw output" : "Show the full output";
       more.onclick = function () {
         term.textContent = "$ " + data.result.cmd + "  exit " + data.result.code + "\n" + text;
         more.remove();

@@ -220,6 +220,45 @@ function listingNames(stdout) {
     .filter((n) => n && n !== "." && n !== "..");
 }
 
+function prettyListing(stdout, title) {
+  const dirs = [];
+  const files = [];
+  const other = [];
+  String(stdout || "")
+    .split("\n")
+    .forEach((line) => {
+      const raw = line.trim();
+      if (!raw || /^total /.test(raw)) return;
+      const parts = raw.split(/\s+/);
+      let kind = "f";
+      let name = raw;
+      if (parts.length >= 9 && /^[\-dlbcps]/.test(parts[0])) {
+        kind = parts[0][0];
+        name = parts.slice(8).join(" ");
+      }
+      if (!name || name === "." || name === "..") return;
+      if (kind === "d") dirs.push(name);
+      else if (kind === "-") files.push(name);
+      else other.push(name);
+    });
+  const sort = (items) => items.sort((a, b) => a.localeCompare(b));
+  const lines = [];
+  if (title) lines.push(title);
+  const block = (label, items) => {
+    if (!items.length) return;
+    lines.push("");
+    lines.push(label);
+    const shown = sort(items).slice(0, 80);
+    shown.forEach((n) => lines.push(n));
+    if (items.length > shown.length) lines.push("… " + (items.length - shown.length) + " more");
+  };
+  block("Directories", dirs);
+  block("Files", files);
+  block("Other", other);
+  if (!dirs.length && !files.length && !other.length) lines.push("(empty)");
+  return lines.join("\n");
+}
+
 function summarizeOutput(cmd, stdout) {
   if (/^ls\b/.test(String(cmd).trim())) {
     const names = listingNames(stdout);
@@ -567,7 +606,11 @@ function endReport(plan, result, cwd) {
   });
   const root = cwd || "";
   const lines = ["Done."];
-  if (paths.length) {
+  const ls = /^ls\b/.test(String((result && result.cmd) || "").trim());
+  if (!paths.length && ls) {
+    const where = (String(result.cmd).match(/\s(\/\S+)\s*$/) || [])[1] || "";
+    lines.push(prettyListing(result.stdout, where));
+  } else if (paths.length) {
     paths.forEach((p) => {
       const full = path.isAbsolute(p) || !root ? p : path.join(root, p);
       lines.push((/\.pdf$/i.test(p) ? "PDF written to path: " : "Wrote path: ") + full);
@@ -921,6 +964,20 @@ function runUnitTests() {
   );
   check("end report file", fileEnded && /Wrote path: \/tmp\/loop-x\/foo\.txt/.test(fileEnded));
   check("end report waits", endReport({ steps: [{ status: "todo", cmd: "ls" }] }, null, "/tmp") === null);
+  const sample =
+    "total 8\n" +
+    "drwxrwxrwt 2 root root 4096 Sep 30 19:56 .\n" +
+    "drwxr-xr-x 3 root root 4096 Sep  1  2023 ..\n" +
+    "-rw-rw-r-- 1 user user 5 Sep 30 08:52 hello.txt\n" +
+    "drwxr-xr-x 2 root root 4096 Sep 30 10:18 asyncsnapshot\n";
+  const pretty = prettyListing(sample, "/tmp");
+  check("pretty listing", /Directories\nasyncsnapshot/.test(pretty) && /Files\nhello\.txt/.test(pretty) && !/\.\./.test(pretty) && !/rwx/.test(pretty));
+  const listedDone = endReport(
+    { steps: [{ status: "ok", cmd: "ls -la /tmp", note: "names (2): hello.txt, asyncsnapshot" }] },
+    { cmd: "ls -la /tmp", stdout: sample },
+    "/tmp/loop-x"
+  );
+  check("end report lists names", listedDone && /hello\.txt/.test(listedDone) && !/names \(/.test(listedDone));
   const angry = heuristicPlan("look in my chat logs for all my angry remarks, collect them and put them into an excel and zip the excel");
   check("angry pipeline", angry && angry.steps.length === 4 && angry.steps[2].cmd == null);
   const c = heuristicCheck(p.steps[0], { cmd: "ls", code: 1, stdout: "" }, "KEEP GOAL: x");
@@ -978,6 +1035,7 @@ module.exports = {
   parseCheck,
   parseEmit,
   listingNames,
+  prettyListing,
   summarizeOutput,
   shortListing,
   finishReport,
