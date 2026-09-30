@@ -162,14 +162,20 @@ function addInline(parent, text) {
 function copyBtn(getText) {
   const copy = document.createElement("button");
   copy.type = "button";
-  copy.className = "tiny ghost";
-  copy.textContent = "Copy";
+  copy.className = "icon-copy";
+  copy.setAttribute("aria-label", "Copy");
+  copy.title = "Copy";
+  copy.innerHTML = '<svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M6 16H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" fill="none" stroke="currentColor" stroke-width="2"/></svg>';
   copy.onclick = function (ev) {
     if (ev) ev.stopPropagation();
     const value = String(typeof getText === "function" ? getText() : getText || "");
     const done = function () {
-      copy.textContent = "Copied";
-      setTimeout(function () { copy.textContent = "Copy"; }, 1200);
+      copy.classList.add("done");
+      copy.title = "Copied";
+      setTimeout(function () {
+        copy.classList.remove("done");
+        copy.title = "Copy";
+      }, 1200);
     };
     const fallback = function () {
       const area = document.createElement("textarea");
@@ -177,7 +183,7 @@ function copyBtn(getText) {
       document.body.appendChild(area);
       area.select();
       try { document.execCommand("copy"); done(); }
-      catch (_) { copy.textContent = "Copy failed"; }
+      catch (_) { copy.title = "Copy failed"; }
       area.remove();
     };
     if (navigator.clipboard && navigator.clipboard.writeText) {
@@ -204,27 +210,14 @@ function addCodeBox(host, lang, code) {
   bar.className = "codebar";
   const name = document.createElement("span");
   name.textContent = lang || "code";
-  const copy = document.createElement("button");
-  copy.type = "button";
-  copy.className = "tiny";
-  copy.textContent = "Copy";
-  copy.onclick = function () {
-    const done = function () {
-      copy.textContent = "Copied";
-      setTimeout(function () { copy.textContent = "Copy"; }, 1200);
-    };
-    if (navigator.clipboard && navigator.clipboard.writeText) {
-      navigator.clipboard.writeText(code).then(done).catch(function () { copy.textContent = "Copy failed"; });
-    } else copy.textContent = "Copy failed";
-  };
   bar.appendChild(name);
-  bar.appendChild(copy);
   const pre = document.createElement("pre");
   const el = document.createElement("code");
   el.textContent = code.replace(/\n$/, "");
   pre.appendChild(el);
   box.appendChild(bar);
   box.appendChild(pre);
+  box.appendChild(copyBtn(code));
   host.appendChild(box);
 }
 
@@ -436,12 +429,9 @@ function addMsg(role, text, quiet) {
   const body = document.createElement("div");
   body.className = "body";
   body.textContent = text;
-  const row = document.createElement("div");
-  row.className = "viewbar";
-  row.appendChild(copyBtn(function () { return visibleAnswer(div) || text; }));
   div.appendChild(who);
-  div.appendChild(row);
   div.appendChild(body);
+  div.appendChild(copyBtn(function () { return visibleAnswer(div) || text; }));
   const event = !quiet && text ? note(role === "user" ? "you" : role === "err" ? "error" : "loop", text) : null;
   if (chat) {
     chat.appendChild(div);
@@ -512,12 +502,12 @@ function showReason(box, text) {
     panel.hidden = !open;
     el.classList.toggle("open", open);
   };
-  bar.appendChild(copyBtn(function () { return pre.textContent || raw || ""; }));
   bar.appendChild(fmt);
   panel.appendChild(bar);
   panel.appendChild(pre);
   el.appendChild(k);
   el.appendChild(panel);
+  el.appendChild(copyBtn(function () { return pre.textContent || raw || ""; }));
   const body = box.querySelector(".body");
   if (body) box.insertBefore(el, body);
   else box.appendChild(el);
@@ -840,14 +830,11 @@ async function applyOne(cmd, stepId, host, after) {
     term.className = "term";
     const text = (data.result.stdout || "") + (data.result.stderr ? "\n" + data.result.stderr : "");
     const full = "$ " + data.result.cmd + "  exit " + data.result.code + (data.result.code === 124 ? "  (stopped: no output or too long)" : "") + (text.trim() ? "\n" + text : "");
-    const bar = document.createElement("div");
-    bar.className = "viewbar";
-    bar.appendChild(copyBtn(full));
     const pre = document.createElement("pre");
     pre.className = "native";
     pre.textContent = "$ " + data.result.cmd + "  exit " + data.result.code + (data.result.code === 124 ? "  (stopped: no output or too long)" : "");
-    term.appendChild(bar);
     term.appendChild(pre);
+    term.appendChild(copyBtn(full));
     if (text.trim()) {
       const more = document.createElement("button");
       more.type = "button";
@@ -857,7 +844,7 @@ async function applyOne(cmd, stepId, host, after) {
         pre.textContent = full;
         more.remove();
       };
-      bar.appendChild(more);
+      term.appendChild(more);
     }
     host.appendChild(term);
     note("command", "$ " + data.result.cmd + "  exit " + data.result.code + "\n" + text);
@@ -1282,14 +1269,15 @@ if (testBtn)
   };
 
 var copyDraft = document.getElementById("copyDraft");
-if (copyDraft) {
-  copyDraft.className = "tiny ghost";
-  copyDraft.replaceWith(copyBtn(function () { return input ? input.value : ""; }));
+if (copyDraft && composer) {
+  composer.appendChild(copyBtn(function () { return input ? input.value : ""; }));
+  copyDraft.remove();
 }
 var copyState = document.getElementById("copyState");
-if (copyState) {
-  const live = copyBtn(function () { return ctxEl ? ctxEl.textContent : ""; });
-  copyState.replaceWith(live);
+var aside = document.querySelector("aside");
+if (copyState && aside) {
+  aside.appendChild(copyBtn(function () { return ctxEl ? ctxEl.textContent : ""; }));
+  copyState.remove();
 }
 
 var exportBtn = document.getElementById("export");
