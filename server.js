@@ -139,7 +139,7 @@ app.post("/api/turn", async (req, res) => {
       const simple = lib.heuristicDirect(text);
       const parsed = simple || lib.parseDirect(await ollamaText(
         lib.SYSTEM_A,
-        "Working context:\n" + (context || "(empty)") + "\n\nUser:\n" + lib.clip(text, 2000),
+        "State:\n" + (context || "(empty)") + "\n\nUser:\n" + lib.clip(text, 2000),
         400
       ));
       return res.json({ mode: "A", why: pick.why, display: parsed.display, cmd: parsed.cmd, context });
@@ -153,7 +153,7 @@ app.post("/api/turn", async (req, res) => {
     } else {
       const raw = await ollamaText(
         lib.SYSTEM_PLAN,
-        "Working context:\n" + (context || "(empty)") + "\n\nUser:\n" + lib.clip(text, 2000),
+        "State:\n" + (context || "(empty)") + "\n\nUser:\n" + lib.clip(text, 2000),
         500
       );
       plan = lib.parsePlan(raw, text);
@@ -232,7 +232,7 @@ app.post("/api/emit", async (req, res) => {
       const raw = await ollamaText(
         lib.SYSTEM_EMIT,
         [
-          "Context:\n" + (context || "(empty)"),
+          "State:\n" + (context || "(empty)"),
           `Step ${step.id}: ${step.do}`,
           "Need: " + (step.need || "(none)"),
           "Expect: " + step.expect,
@@ -269,7 +269,7 @@ app.post("/api/replan", async (req, res) => {
       const raw = await ollamaText(
         lib.SYSTEM_REPLAN,
         [
-          "Context:\n" + (context || "(empty)"),
+          "State:\n" + (context || "(empty)"),
           "Goal: " + (plan.goal || ""),
           "Failed because: " + why,
           "Already done: " + (done.join("; ") || "none"),
@@ -305,7 +305,7 @@ app.post("/api/check", async (req, res) => {
         const raw = await ollamaText(
           lib.SYSTEM_CHECK,
           [
-            "Context:\n" + (context || "(empty)"),
+            "State:\n" + (context || "(empty)"),
             "Goal: " + ((plan && plan.goal) || ""),
             "Remaining: " + (plan.steps || []).filter((s) => s.status !== "ok" && s.id !== step.id).map((s) => s.do).join("; "),
             `Step ${step.id}: ${step.do}`,
@@ -355,7 +355,8 @@ app.post("/api/context/clear", (_req, res) => {
   saveContext("");
   ledger = [];
   lastGoodStep = null;
-  res.json({ context: "" });
+  sessionCwd = WORKSPACE;
+  res.json({ context: "", cwd: sessionCwd });
 });
 
 if (require.main === module) {

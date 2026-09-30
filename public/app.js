@@ -1,10 +1,8 @@
 const chat = document.getElementById("chat");
 const ctxEl = document.getElementById("ctx");
 const input = document.getElementById("input");
-const statusEl = document.getElementById("status");
 const sendBtn = document.getElementById("send");
 const budgetEl = document.getElementById("budget");
-const modeHint = document.getElementById("modeHint");
 const chipModel = document.getElementById("chipModel");
 const chipCwd = document.getElementById("chipCwd");
 const modesEl = document.getElementById("modes");
@@ -22,45 +20,40 @@ function setText(el, v) {
   if (el) el.textContent = v;
 }
 
-function ensureLive() {
-  let bar = document.getElementById("live");
-  if (bar) return bar;
-  bar = document.createElement("div");
-  bar.id = "live";
-  bar.className = "live";
-  bar.hidden = true;
-  const thread = document.getElementById("thread");
-  const chatEl = document.getElementById("chat");
-  if (thread && chatEl) thread.insertBefore(bar, chatEl);
-  return bar;
-}
-
 function setHold(text) {
   hold = text || "";
-  if (!busy) setBusy(false);
+  const note = document.querySelector("#chat .plan .next-note");
+  if (note) note.textContent = hold;
+}
+
+function showSpinner(label) {
+  if (!chat) return;
+  let el = document.getElementById("spin");
+  if (!el) {
+    el = document.createElement("div");
+    el.id = "spin";
+    el.className = "msg bot spin";
+    el.setAttribute("role", "status");
+    el.innerHTML = '<span class="dots" aria-hidden="true"><i></i><i></i><i></i></span><span class="spin-label"></span>';
+    chat.appendChild(el);
+  }
+  const lab = el.querySelector(".spin-label");
+  if (lab && label) lab.textContent = label;
+  el.hidden = false;
+  chat.appendChild(el);
+  chat.scrollTop = chat.scrollHeight;
+}
+
+function hideSpinner() {
+  const el = document.getElementById("spin");
+  if (el) el.hidden = true;
 }
 
 function setBusy(on, label) {
   busy = on;
   if (sendBtn) sendBtn.disabled = on;
-  const bar = ensureLive();
-  if (!bar) return;
-  if (on) {
-    bar.hidden = false;
-    bar.className = "live on";
-    bar.textContent = (label || "Working") + "…";
-    setText(statusEl, (label || "Working") + "…");
-    return;
-  }
-  setText(statusEl, hold);
-  if (hold) {
-    bar.hidden = false;
-    bar.className = "live wait";
-    bar.textContent = hold;
-  } else {
-    bar.hidden = true;
-    bar.textContent = "";
-  }
+  if (on) showSpinner(label || "Working");
+  else hideSpinner();
 }
 
 function addMsg(role, text) {
@@ -76,6 +69,7 @@ function addMsg(role, text) {
   div.appendChild(body);
   if (chat) {
     chat.appendChild(div);
+    if (busy) showSpinner();
     chat.scrollTop = chat.scrollHeight;
   }
   return { div: div, body: body };
@@ -99,7 +93,6 @@ function paintModes() {
   Array.prototype.forEach.call(modesEl.querySelectorAll("button"), function (btn) {
     btn.classList.toggle("on", btn.getAttribute("data-mode") === active);
   });
-  setText(modeHint, (g.mode === "B" ? "Plan" : "Direct") + " · " + g.why + " · Enter send");
 }
 
 function renderContext(text) {
@@ -185,7 +178,10 @@ function renderPending(host) {
   line.appendChild(document.createTextNode(pendingA.cmd));
   wrap.appendChild(line);
   host.appendChild(wrap);
-  setHold("Waiting for you. Approve the command. After it runs, the model reads the output and updates state.");
+  const note = document.createElement("div");
+  note.className = "next-note";
+  wrap.appendChild(note);
+  setHold("Approve the command. After it runs, the model reads the output and updates state.");
   rowBtns(wrap, [
     {
       label: "Approve",
@@ -275,6 +271,9 @@ function renderPlan(host) {
     wrap.appendChild(c);
   }
   host.appendChild(wrap);
+  const note = document.createElement("div");
+  note.className = "next-note";
+  wrap.appendChild(note);
   const step = plan.steps && plan.steps[plan.cursor];
   const finished = plan.steps && plan.steps.length && plan.steps.every(function (s) { return s.status === "ok"; });
   const reportStep = step && !step.cmd && /report|short name|summary/i.test((step.do || "") + " " + (step.expect || ""));
@@ -553,11 +552,23 @@ if (testBtn)
 var clearBtn = document.getElementById("clear");
 if (clearBtn)
   clearBtn.onclick = async function () {
-    await fetch("/api/context/clear", { method: "POST" });
+    try {
+      await fetch("/api/context/clear", { method: "POST" });
+    } catch (_) {}
     pendingA = null;
     plan = null;
     check = null;
-    await refresh();
+    hold = "";
+    busy = false;
+    if (sendBtn) sendBtn.disabled = false;
+    hideSpinner();
+    if (chat) chat.replaceChildren();
+    if (input) input.value = "";
+    try {
+      await refresh();
+    } catch (_) {
+      renderContext("");
+    }
     updateBudget();
   };
 

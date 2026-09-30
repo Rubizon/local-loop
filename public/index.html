@@ -3,42 +3,39 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>local-loop</title>
+  <title>Loop</title>
   <link rel="stylesheet" href="/app.css" />
 </head>
 <body>
   <header>
-    <div class="brand">
-      <strong>local-loop</strong>
-      <span class="chip" id="chipModel">model</span>
-      <span class="chip" id="chipCwd">cwd</span>
-    </div>
-    <div class="modes" id="modes">
-      <button type="button" data-mode="A" class="on">Direct</button>
-      <button type="button" data-mode="B">Plan</button>
-    </div>
-    <span id="status" class="status"></span>
-    <div class="header-actions">
-      <button type="button" id="test">Self-test</button>
-      <button type="button" id="clear">Clear</button>
-    </div>
+    <strong>Loop</strong>
+    <span class="quiet" id="chipModel">model</span>
+    <span class="quiet" id="chipCwd"></span>
+    <span class="spacer"></span>
+    <button type="button" id="clear" class="ghost">Clear</button>
   </header>
   <main>
     <section id="thread">
       <div id="chat"></div>
       <footer>
-        <textarea id="input" placeholder="One command, or a plan. After it runs, the model reads the output and updates state."></textarea>
-        <div class="composer-bar">
-          <span id="budget" class="meter">~0 / 8192</span>
-          <span class="hint" id="modeHint">Direct · Enter send</span>
-          <button class="ok" type="button" id="send">Send</button>
+        <div class="composer">
+          <textarea id="input" rows="1" placeholder="Message"></textarea>
+          <div class="composer-bar">
+            <div class="modes" id="modes">
+              <button type="button" data-mode="A" class="on">Direct</button>
+              <button type="button" data-mode="B">Plan</button>
+            </div>
+            <span id="budget" class="meter">~0</span>
+            <button class="send" type="button" id="send" aria-label="Send">↑</button>
+          </div>
         </div>
       </footer>
     </section>
     <aside>
-      <h2>Working context</h2>
-      <p class="hint">Always visible. After a command, the model rewrites it from the output. Nothing is stored until there is a goal.</p>
+      <h2>State</h2>
+      <p class="hint">The only memory. The model sees this text, not the chat.</p>
       <pre id="ctx">(empty)</pre>
+      <button type="button" id="test" class="ghost">Self-test</button>
     </aside>
   </main>
   <script src="/app.js"></script>
