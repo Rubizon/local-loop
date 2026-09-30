@@ -834,6 +834,29 @@ function diagnoseReply(kind, raw) {
     if (!cmd && !ask) return "JSON has neither cmd nor ask. Keys: " + keys;
     return cmd ? "command: " + clip(cmd, 70) : "asks: " + clip(ask, 70);
   }
+  if (kind === "think") {
+    const reason = typeof parsed.reason === "string" ? parsed.reason.trim() : "";
+    const cmd = typeof parsed.cmd === "string" ? parsed.cmd.trim() : "";
+    if (!reason) return "JSON has no reason. Keys: " + keys;
+    if (!cmd) return "reason but no command. It did not decide to read the file. Reason: " + clip(reason, 80);
+    if (!/lib\.js/.test(cmd)) return "command does not read lib.js: " + clip(cmd, 70);
+    return "reason and a read command";
+  }
+  if (kind === "ask") {
+    const display = typeof parsed.display === "string" ? parsed.display.trim() : "";
+    const cmd = typeof parsed.cmd === "string" ? parsed.cmd.trim() : "";
+    const reason = typeof parsed.reason === "string" ? parsed.reason.trim() : "";
+    if (cmd) return "invented a command for a question: " + clip(cmd, 70);
+    if (!display && !reason) return "no answer. Keys: " + keys;
+    return "answers without a command";
+  }
+  if (kind === "say") {
+    const say = typeof parsed.say === "string" ? parsed.say.trim() : "";
+    if (!say) return "JSON has no say. Keys: " + keys;
+    if (/\b(KEEP|FACT|NEXT)\b/.test(say)) return "report recites state: " + clip(say, 80);
+    if (!/localTurn|speak/.test(say)) return "report ignores the output. Starts: " + clip(say, 80);
+    return "reports the output";
+  }
   return "unknown probe";
 }
 
@@ -937,6 +960,24 @@ function scoreWorkflow(kind, raw) {
     const ask = typeof parsed.ask === "string" && parsed.ask.trim();
     ok = !!(cmd || ask);
     detail = ok ? (cmd ? "returns a command" : "asks a question") : diagnosis;
+  } else if (kind === "think") {
+    name = "Think";
+    const reason = typeof parsed.reason === "string" && parsed.reason.trim();
+    const cmd = typeof parsed.cmd === "string" ? parsed.cmd.trim() : "";
+    ok = !!(reason && cmd && /lib\.js/.test(cmd));
+    detail = ok ? "decides to read the file" : diagnosis;
+  } else if (kind === "ask") {
+    name = "Ask";
+    const display = typeof parsed.display === "string" && parsed.display.trim();
+    const reason = typeof parsed.reason === "string" && parsed.reason.trim();
+    const cmd = typeof parsed.cmd === "string" ? parsed.cmd.trim() : "";
+    ok = !cmd && !!(display || reason);
+    detail = ok ? "answers without a command" : diagnosis;
+  } else if (kind === "say") {
+    name = "Say";
+    const say = typeof parsed.say === "string" ? parsed.say.trim() : "";
+    ok = !!say && !/\b(KEEP|FACT|NEXT)\b/.test(say) && /localTurn|speak/.test(say);
+    detail = ok ? "reports the output" : diagnosis;
   } else {
     detail = "unknown probe";
   }
@@ -957,6 +998,24 @@ const WORKFLOW_PROBES = [
     system: SYSTEM_EMIT,
     user: "State:\nKEEP GOAL: write a pdf\nFACT: names (2): alpha, beta\n\nStep 2: Write a PDF summary of those names\nNeed: FACT names\nExpect: pdf file exists",
     predict: 180,
+  },
+  {
+    kind: "think",
+    system: SYSTEM_THINK,
+    user: "User: read this file and report /tmp/lib.js\nThe first character of your reply is {.",
+    predict: 220,
+  },
+  {
+    kind: "ask",
+    system: SYSTEM_THINK,
+    user: "User: what is 2+2\nThe first character of your reply is {.",
+    predict: 120,
+  },
+  {
+    kind: "say",
+    system: SYSTEM_SAY,
+    user: "Task: read this file and report /tmp/lib.js\nCommand: sed -n '1,40p' /tmp/lib.js\nOutput:\nfunction localTurn(text) {\n  return 1;\n}\nfunction speak(opts) {}\nThe first character of your reply is {.",
+    predict: 200,
   },
 ];
 
@@ -1043,6 +1102,12 @@ function runUnitTests() {
   check("listing fact survives retry", /alpha, beta/.test(retried));
   check("workflow direct", scoreWorkflow("direct", '{"display":"hi","cmd":null}').ok === true);
   check("workflow junk", scoreWorkflow("direct", "not json").ok === false);
+  check("workflow think reads", scoreWorkflow("think", '{"reason":"The file has not been read.","display":"I will read it first.","cmd":"sed -n \'1,80p\' /tmp/lib.js"}').ok === true);
+  check("workflow think echo fails", scoreWorkflow("think", '{"reason":"ok","display":"/tmp/lib.js","cmd":null}').ok === false);
+  check("workflow ask stays quiet", scoreWorkflow("ask", '{"reason":"No command is needed.","display":"4","cmd":null}').ok === true);
+  check("workflow ask no command", scoreWorkflow("ask", '{"reason":"I will list it.","display":"ok","cmd":"ls /tmp"}').ok === false);
+  check("workflow say reports", scoreWorkflow("say", '{"say":"The file defines localTurn and speak."}').ok === true);
+  check("workflow say not state", scoreWorkflow("say", '{"say":"KEEP GOAL: read it. NEXT: done."}').ok === false);
   check("ok string is success", parseCheck('{"ok":"ok","why":"ok"}', "").ok === true);
   const emitted = heuristicEmit(pdfPlan.steps[1], stated);
   check("emit pdf", emitted && /tmp-summary\.pdf/.test(emitted.cmd || "") && pdfBytes("names").slice(0, 5).toString() === "%PDF-");
