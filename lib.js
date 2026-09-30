@@ -48,7 +48,8 @@ display is the chat bubble. One plain sentence. The user may press Format. Do no
 cmd is the shell command behind Approve. It has not run.
 cmd is null only for arithmetic, or for a program they asked to see. Put that program in display.
 For anything else, cmd is required. The clock, the user, the host, the directory, the disk, and any path they named are on this PC. Do not say you lack access.
-Tomorrow's date or time uses the date command. A path they named is printed by cmd. A directory they named is listed by cmd. A python command they asked for is in cmd, not in display.`;
+Tomorrow's date or time uses the date command. A path they named is printed by cmd. A directory they named is listed by cmd. A python command they asked for is in cmd, not in display.
+If State says a file exists, it exists. Do not overwrite it unless the user asked to change that file. Showing it is a read command.`;
 
 const SYSTEM_SAY = `Report the command output. JSON only. The first character is {.
 {"say":"plain sentences about what the output shows"}
@@ -419,6 +420,13 @@ function safeFileName(name) {
   const n = String(name || "");
   if (!/^[A-Za-z0-9._-]+$/.test(n) || n === "." || n === "..") return null;
   return n;
+}
+
+function writtenFact(cmd) {
+  const match = String(cmd || "").match(/open\('([^']+)'\s*,\s*'([wa])'\)\.write\('((?:\\.|[^'\\])*)'\)/);
+  if (!match) return "";
+  const text = match[3].replace(/\\n/g, " ").replace(/\\'/g, "'").replace(/\\"/g, '"').replace(/\\\\/g, "\\").replace(/\s+/g, " ").trim();
+  return text ? match[1] + " exists and contains " + clip(text, 160) : match[1] + " exists";
 }
 
 function fileFromContext(context) {
@@ -1095,6 +1103,7 @@ function stepState(plan, step, result, ok, prev) {
       if (/^FACT:/.test(l.trim())) addFact(l.trim());
     });
   addFact(summarizeOutput((result && result.cmd) || "", (result && result.stdout) || ""));
+  addFact(writtenFact((result && result.cmd) || ""));
   facts.forEach((l) => lines.push(l));
   const done = steps.filter((s) => s.status === "ok" || (ok && s.id === step.id)).map((s) => s.do);
   if (done.length) lines.push("DONE: " + done.join("; "));
@@ -1914,6 +1923,7 @@ const USER_SCENARIOS = [
   { name: "write 5 to 9", harness: true, pass: () => { const t = localTurn("write 5 to 9 into the file seq.txt", ""); return !!(t.plan && /range\(5,10\)/.test(t.plan.steps[0].cmd || "")); } },
   { name: "write hello into foo", harness: true, pass: () => { const t = localTurn('write "hello world" into foo.txt', "KEEP GOAL: create foo.txt"); return !!(t.plan && !t.needsModel && /foo\.txt/.test(t.plan.steps[0].cmd || "") && /hello world/.test(t.plan.steps[0].cmd || "")); } },
   { name: "write into the open file", harness: true, pass: () => { const t = localTurn('write into the file "hello world"', "KEEP GOAL: create foo.txt\nDONE: Write foo.txt"); return !!(t.plan && /foo\.txt/.test(t.plan.steps[0].cmd || "") && /hello world/.test(t.plan.steps[0].cmd || "")); } },
+  { name: "write remembers the text", harness: true, pass: () => /foo\.txt exists and contains hello world/.test(stepState({ goal: "KEEP GOAL: write into foo.txt", steps: [{ id: "1", do: "Write into foo.txt", status: "todo" }] }, { id: "1", do: "Write into foo.txt" }, { cmd: "python3 -c \"open('foo.txt','w').write('hello world\\n')\"", code: 0, stdout: "" }, true, "")) },
   { name: "question is not a fact", harness: true, pass: () => rememberAnswer("KEEP GOAL: create foo.txt", "I need to clarify: do you want a file named hello?") === "KEEP GOAL: create foo.txt" },
   { name: "block sudo", harness: true, pass: () => { try { assertSafeCmd("sudo reboot"); return false; } catch (_) { return true; } } },
   { name: "block mkfs", harness: true, pass: () => { try { assertSafeCmd("mkfs.ext4 /dev/sda"); return false; } catch (_) { return true; } } },
@@ -2177,7 +2187,7 @@ function runUnitTests() {
   check("program stays in the answer", shown && !shown.cmd && !shown.plan && /puts/.test(shown.display) && shown.display.includes("\n"));
   const lifted = parseThink('{"reason":"search","display":"grep \\"error\\" /tmp/app.log\\nor\\nrg error /tmp/app.log","cmd":null}', "find error");
   check("command in the answer is runnable", lifted.cmd && /^grep /.test(lifted.cmd) && /app\.log/.test(lifted.cmd));
-  check("prompt has no sample file", !/lib\.js/.test(SYSTEM_THINK) && !/"cmd":null/.test(SYSTEM_THINK) && /Reasoning line/.test(SYSTEM_THINK) && /already done/.test(SYSTEM_THINK) && /date command/.test(SYSTEM_THINK));
+  check("prompt has no sample file", !/lib\.js/.test(SYSTEM_THINK) && !/"cmd":null/.test(SYSTEM_THINK) && /Reasoning line/.test(SYSTEM_THINK) && /already done/.test(SYSTEM_THINK) && /date command/.test(SYSTEM_THINK) && /file exists/.test(SYSTEM_THINK));
   check("repair clock", scoreWorkflow("clock", repairReply("clock", '{"reason":"I need the current time.","display":"I cannot determine the time because real-time access is not available.","cmd":null}', "User: what time is it tomorrow?")).ok === true);
   check("repair weekday", scoreWorkflow("weekday", repairReply("weekday", '{"reason":"I will use the system date.","display":"I will add one day.","cmd":null}', "User: what day is it tomorrow?")).ok === true);
   check("repair think", scoreWorkflow("think", repairReply("think", '{"reason":"The request is to read /tmp/lib.js.","display":"I have read and reported the content of /tmp/lib.js.","cmd":null}', "User: read this file and report /tmp/lib.js")).ok === true);
