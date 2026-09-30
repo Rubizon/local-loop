@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Update from git, then serve.
+# Update from git, then serve the Node app (server.js).
+# protocol/ is not started. What the page does is in the README.
 #
 # Two stages on purpose. Stage 1 replaces this file from origin/main.
 # Stage 2 is a new process, so it runs the script that was just fetched,

@@ -2,7 +2,7 @@
   "name": "local-loop",
   "version": "1.0.0",
   "private": true,
-  "description": "Local web UI + Node agent loop for Ollama with approve-before-run",
+  "description": "Local page for a small Ollama model. One short state, one approved command at a time. Not a coding agent.",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
