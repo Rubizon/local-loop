@@ -159,6 +159,24 @@ function addInline(parent, text) {
   if (last < text.length) parent.appendChild(document.createTextNode(text.slice(last)));
 }
 
+const FORMAT_ICON = '<svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path d="M4 6h16M4 12h10M4 18h13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>';
+
+function formatBtn() {
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "icon-format";
+  btn.title = "Format";
+  btn.setAttribute("aria-label", "Format");
+  btn.innerHTML = FORMAT_ICON;
+  return btn;
+}
+
+function markFormat(btn, on, label) {
+  btn.classList.toggle("on", !!on);
+  btn.title = label;
+  btn.setAttribute("aria-label", label);
+}
+
 function copyBtn(getText) {
   const copy = document.createElement("button");
   copy.type = "button";
@@ -353,10 +371,7 @@ function dress(box, raw) {
   dots.appendChild(document.createElement("i"));
   status.appendChild(dots);
   status.appendChild(document.createTextNode(" Formatting"));
-  const toggle = document.createElement("button");
-  toggle.type = "button";
-  toggle.className = "tiny ghost";
-  toggle.textContent = "Format";
+  const toggle = formatBtn();
   const native = document.createElement("pre");
   native.className = "native";
   native.textContent = text;
@@ -364,11 +379,16 @@ function dress(box, raw) {
   read.className = "read";
   read.hidden = true;
   let showRaw = true;
+  bar.hidden = true;
   bar.appendChild(status);
-  bar.appendChild(toggle);
   body.appendChild(bar);
   body.appendChild(native);
   body.appendChild(read);
+  if (box.div) {
+    const owned = box.div.querySelector(":scope > button.icon-copy");
+    if (owned) body.appendChild(owned);
+  }
+  body.appendChild(toggle);
   const small = window.LoopFormat && LoopFormat.canFormat && LoopFormat.canFormat(text);
   if (!small) {
     toggle.hidden = true;
@@ -378,7 +398,7 @@ function dress(box, raw) {
   function paint() {
     read.hidden = showRaw;
     native.hidden = !showRaw;
-    toggle.textContent = showRaw ? "Format" : "Raw";
+    markFormat(toggle, !showRaw, showRaw ? "Format" : "Raw");
   }
   toggle.onclick = function (ev) {
     ev.stopPropagation();
@@ -388,6 +408,7 @@ function dress(box, raw) {
       return;
     }
     status.hidden = false;
+    bar.hidden = false;
     toggle.disabled = true;
     var wait = status.lastChild;
     if (wait) wait.textContent = llmAhead > 0 ? " Waiting" : " Formatting";
@@ -413,6 +434,7 @@ function dress(box, raw) {
       })
       .then(function () {
         status.hidden = true;
+        bar.hidden = true;
         toggle.disabled = false;
         var pre = box.div && box.div.querySelector(".reason-body");
         if (pre && pre.dataset.formatted !== "1") pre.textContent = pre.dataset.raw || "(none)";
@@ -470,12 +492,7 @@ function showReason(box, text) {
   const panel = document.createElement("div");
   panel.className = "reason-panel";
   panel.hidden = true;
-  const bar = document.createElement("div");
-  bar.className = "reason-bar";
-  const fmt = document.createElement("button");
-  fmt.type = "button";
-  fmt.className = "tiny ghost";
-  fmt.textContent = "Format";
+  const fmt = formatBtn();
   const pre = document.createElement("pre");
   pre.className = "reason-body";
   pre.dataset.raw = raw;
@@ -488,12 +505,12 @@ function showReason(box, text) {
     pre.dataset.formatted = formatted ? "1" : "0";
     if (!formatted || !window.LoopFormat) {
       pre.textContent = raw || "(none)";
-      fmt.textContent = "Format";
+      markFormat(fmt, false, "Format");
       return;
     }
     var shaped = LoopFormat.formatAnswer(raw);
     pre.textContent = shaped.replace(/^```[a-zA-Z0-9+#]*\n/, "").replace(/\n```$/, "") || raw;
-    fmt.textContent = "Plain";
+    markFormat(fmt, true, "Plain");
     note("format", "reasoning formatted\n\n" + pre.textContent);
   };
   k.onclick = function (ev) {
@@ -502,11 +519,10 @@ function showReason(box, text) {
     panel.hidden = !open;
     el.classList.toggle("open", open);
   };
-  bar.appendChild(fmt);
-  panel.appendChild(bar);
-  panel.appendChild(pre);
   el.appendChild(k);
+  panel.appendChild(pre);
   el.appendChild(panel);
+  el.appendChild(fmt);
   el.appendChild(copyBtn(function () { return pre.textContent || raw || ""; }));
   const body = box.querySelector(".body");
   if (body) box.insertBefore(el, body);

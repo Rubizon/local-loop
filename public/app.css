@@ -67,7 +67,8 @@ main {
 }
 .msg { position: relative; margin: 0 0 16px; max-width: 100%; min-width: 0; }
 .reason, .term, .codebox, .composer, aside { position: relative; }
-button.icon-copy {
+button.icon-copy,
+button.icon-format {
   position: absolute;
   top: 4px;
   right: 4px;
@@ -85,10 +86,17 @@ button.icon-copy {
   opacity: 0;
   pointer-events: none;
 }
+button.icon-format { right: 34px; }
 .msg:hover > button.icon-copy,
 .msg:focus-within > button.icon-copy,
+.msg .body:hover > button.icon-copy,
+.msg .body:focus-within > button.icon-copy,
+.msg .body:hover > button.icon-format,
+.msg .body:focus-within > button.icon-format,
 .reason:hover > button.icon-copy,
 .reason:focus-within > button.icon-copy,
+.reason:hover > button.icon-format,
+.reason:focus-within > button.icon-format,
 .term:hover > button.icon-copy,
 .term:focus-within > button.icon-copy,
 .codebox:hover > button.icon-copy,
@@ -100,10 +108,12 @@ aside:focus-within > button.icon-copy {
   opacity: 1;
   pointer-events: auto;
 }
-button.icon-copy.done { color: #fff; }
+button.icon-copy.done,
+button.icon-format.on { color: #fff; background: #3a3a3a; }
 .msg.user > button.icon-copy { top: 8px; left: -32px; right: auto; }
 .term > button.icon-copy,
 .codebox > button.icon-copy { top: 6px; right: 6px; }
+.msg .body { position: relative; }
 .msg.user {
   margin-left: auto;
   width: fit-content;
