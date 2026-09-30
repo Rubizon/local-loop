@@ -99,7 +99,7 @@ main {
 .reason-body {
   margin: 0;
   white-space: pre-wrap;
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
 }
 .viewbar {
   display: flex;

@@ -1855,6 +1855,8 @@ function runUnitTests() {
   check("markup keeps the words", presentMarkup("prints hello", "```md\n- prints hello\n```") === "- prints hello");
   check("markup ignores a lecture", presentMarkup("prints hello", "Markdown only. Do not add or drop words.") === "prints hello");
   check("listing is not sent for markup", needsMarkup("Here is /tmp.\n\nDirectories\n" + "a\n".repeat(20)) === false);
+  check("a directory list stays text", require("./public/format").isListing("Here is /tmp.\n\nDirectories\n" + ".font-unix\n".repeat(10) + "\nFiles\na.txt\n") === true);
+  check("a sentence is not a list", require("./public/format").isListing("2 plus 2 equals 4.") === false);
   check("a short sentence can be marked up", needsMarkup("2 plus 2 equals 4.") === true);
   const joined = localTurn("concatenate all files in a directory", "");
   check("concat is one python command", !joined.needsModel && /python3/.test(joined.cmd || "") && /concatenated\.txt/.test(joined.cmd || ""));

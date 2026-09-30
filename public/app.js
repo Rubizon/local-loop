@@ -243,6 +243,10 @@ function addPre(host, text) {
 function renderMarkdown(md, host) {
   host.textContent = "";
   var src = String(md || "").replace(/\r\n/g, "\n");
+  if (window.LoopFormat && LoopFormat.isListing && LoopFormat.isListing(src)) {
+    addPre(host, src);
+    return;
+  }
   src = src.replace(/```([a-zA-Z0-9+#]*)[ \t]+([^`\n]+)```/g, function (_m, lang, code) {
     return "```" + lang + "\n" + code.trim() + "\n```";
   });
@@ -297,6 +301,12 @@ function dress(box, raw) {
   body.appendChild(read);
   body.appendChild(rawEl);
   renderMarkdown(text, read);
+  var listing = window.LoopFormat && LoopFormat.isListing && LoopFormat.isListing(text);
+  if (listing) {
+    status.hidden = true;
+    note("format", "left as text (" + text.split("\n").length + " lines)");
+    return;
+  }
   var shaped = window.LoopFormat && LoopFormat.formatAnswer ? LoopFormat.formatAnswer(text) : text;
   if (shaped && shaped.trim() !== text.trim()) {
     renderMarkdown(shaped, read);

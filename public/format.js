@@ -152,6 +152,15 @@
     return s.replace(/:\s+/, ":\n  ");
   }
 
+  function isListing(text) {
+    var lines = String(text || "").split("\n").map(function (l) { return l.trim(); }).filter(Boolean);
+    if (lines.length < 8) return false;
+    var names = lines.filter(function (l) {
+      return l.indexOf(" ") === -1 || /^(Directories|Files|Other)$/.test(l);
+    });
+    return names.length / lines.length >= 0.6;
+  }
+
   function alignPairs(block) {
     var lines = String(block || "").split("\n");
     if (lines.length < 2) return "";
@@ -220,5 +229,5 @@
     return alignLayout(raw);
   }
 
-  return { formatAnswer: formatAnswer, prettyBraces: prettyBraces, alignLayout: alignLayout };
+  return { formatAnswer: formatAnswer, prettyBraces: prettyBraces, alignLayout: alignLayout, isListing: isListing };
 });
