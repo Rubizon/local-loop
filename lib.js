@@ -165,6 +165,12 @@ function asStep(row, i) {
   };
 }
 
+function cleanDisplay(text, fallback) {
+  const s = String(text || "").replace(/\s+/g, " ").trim();
+  if (!s || /^cmd\s*null$/i.test(s) || s === "null" || s === "undefined") return fallback;
+  return s;
+}
+
 function parsePlan(raw, fallbackGoal) {
   const p = extractJson(raw);
   const stepsIn = Array.isArray(p.steps) ? p.steps : [];
@@ -261,8 +267,51 @@ function angryPlan() {
   };
 }
 
+function safeFileName(name) {
+  const n = String(name || "");
+  if (!/^[A-Za-z0-9._-]+$/.test(n) || n === "." || n === "..") return null;
+  return n;
+}
+
+function fileWritePlan(text) {
+  const t = String(text || "");
+  const named = t.match(/["']([A-Za-z0-9._-]+)["']/) || t.match(/\b([A-Za-z0-9._-]+\.[A-Za-z0-9]+)\b/);
+  const file = safeFileName(named && named[1]);
+  if (!file || !/\b(write|create|save|put)\b/i.test(t)) return null;
+  const range = t.match(/(\d+)\s*(?:->|to|through|…|\.{2,}|-)\s*(\d+)/i);
+  let cmd;
+  let goal;
+  let expect;
+  if (range) {
+    let from = Number(range[1]);
+    let to = Number(range[2]);
+    if (to < from) {
+      const swap = from;
+      from = to;
+      to = swap;
+    }
+    if (to - from > 10000) return null;
+    cmd = "python3 -c \"open('" + file + "','w').write('\\n'.join(str(i) for i in range(" + from + "," + (to + 1) + "))+'\\n')\"";
+    goal = "KEEP GOAL: write " + from + ".." + to + " into " + file;
+    expect = "file contains " + from + ".." + to;
+  } else {
+    cmd = "python3 -c \"open('" + file + "','w').write('')\"";
+    goal = "KEEP GOAL: create " + file;
+    expect = "file written";
+  }
+  return {
+    goal: goal,
+    cursor: 0,
+    steps: [
+      { id: "1", do: "Write " + file, need: "", expect: expect, attach: "paths", cmd: cmd, status: "todo" },
+    ],
+  };
+}
+
 function heuristicPlan(text) {
   const t = String(text || "").trim();
+  const written = fileWritePlan(t);
+  if (written) return written;
   if (/(angry|furious|hate|pissed)/i.test(t) && /(chat|log)/i.test(t) && /(excel|csv|xlsx|zip)/i.test(t)) return angryPlan();
   if (/\/tmp/.test(t) && /pdf/i.test(t)) {
     return {
@@ -578,6 +627,13 @@ function runUnitTests() {
   check("pickMode A", pickMode("what is 2+2", "").mode === "A");
   check("pickMode B", pickMode("list /tmp then zip a csv", "").mode === "B");
   check("pdf prompt is a plan", pickMode("go to /tmp and list all files create a pdf with the summary", "").mode === "B");
+  const numbers = heuristicPlan('create a file "foo.txt" and write there number 0 -> 100 inside.');
+  check(
+    "numbers file command",
+    numbers && numbers.steps.length === 1 && /foo\.txt/.test(numbers.steps[0].cmd) && /range\(0,101\)/.test(numbers.steps[0].cmd) && !/\n/.test(numbers.steps[0].cmd)
+  );
+  check("cmd null is not a reply", cleanDisplay("cmd null", "Plan ready.") === "Plan ready.");
+  check("empty model plan", parsePlan("cmd null", "create a file").steps.length === 0);
   check("no goal drops", finalizeRewrite("", "FACT: x", "hi") === "");
   check("heuristic rewrite skip", heuristicRewrite("", "ls /tmp", "list") === "");
   const kept = finalizeRewrite("KEEP GOAL: inspect /tmp", "FACT: aider", "add");
@@ -659,6 +715,7 @@ module.exports = {
   extractJson,
   parseDirect,
   parsePlan,
+  cleanDisplay,
   parseCheck,
   parseEmit,
   listingNames,

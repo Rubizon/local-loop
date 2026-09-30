@@ -171,8 +171,19 @@ app.post("/api/turn", async (req, res) => {
         500
       );
       plan = lib.parsePlan(raw, text);
-      display = String(lib.extractJson(raw).display || "Plan ready.");
+      display = lib.cleanDisplay(lib.extractJson(raw).display, "");
+      if (!plan.steps.length) plan = null;
     }
+    if (!plan) {
+      return res.json({
+        mode: "A",
+        why: pick.why,
+        display: "I could not make a command for that.",
+        cmd: null,
+        context,
+      });
+    }
+    if (!display) display = "Plan: " + plan.goal.replace(/^KEEP GOAL:\s*/i, "");
     ledger = [];
     lastGoodStep = null;
     res.json({ mode: "B", why: pick.why, display, plan, context });

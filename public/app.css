@@ -77,6 +77,7 @@ main {
   color: var(--muted);
   min-height: 28px;
 }
+.spin[hidden] { display: none !important; }
 .dots { display: inline-flex; gap: 4px; }
 .dots i {
   width: 7px;

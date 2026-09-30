@@ -44,7 +44,7 @@ function showSpinner(label) {
 
 function hideSpinner() {
   const el = document.getElementById("spin");
-  if (el) el.hidden = true;
+  if (el) el.remove();
 }
 
 function setBusy(on, label) {
@@ -475,6 +475,9 @@ async function turn() {
       check = null;
       pendingA = { display: data.display, userText: text, cmd: data.cmd, result: null };
       renderPending(pending.div);
+    } else if (!data.plan || !data.plan.steps || !data.plan.steps.length) {
+      plan = null;
+      pending.body.textContent = data.display || "I could not make a command for that.";
     } else {
       pendingA = null;
       plan = data.plan;
