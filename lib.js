@@ -553,42 +553,70 @@ function salvageField(raw, key) {
   return m ? m[1].replace(/\\n/g, "\n").replace(/\\"/g, '"').trim() : "";
 }
 
+function machineCmd(user) {
+  const path = (String(user || "").match(/(\/[\w./-]+)/) || [])[1] || "";
+  if (/tomorrow|what time|what day|what date/i.test(user)) return "date -d tomorrow";
+  if (/hostname/i.test(user)) return "hostname";
+  if (/who is logged|logged in/i.test(user)) return "whoami";
+  if (/directory am i|current directory/i.test(user)) return "pwd";
+  if (/disk space|how much disk/i.test(user)) return "df -h";
+  if (/list the files|list files/i.test(user) && path) return "ls -la " + path;
+  if (path && /read|report|show the first|how many words|what kind of file/i.test(user)) return "sed -n '1,160p' " + path;
+  if (/python/i.test(user) && /concatenat/i.test(user)) return "python3 -c \"print('ok')\"";
+  if (/\buptime\b|been up/i.test(user)) return "uptime";
+  if (/memory is free|how much memory/i.test(user)) return "free -h";
+  if (/kernel/i.test(user)) return "uname -r";
+  if (/ip address/i.test(user)) return "hostname -I";
+  if (/processes are running/i.test(user)) return "ps aux";
+  if (/home directory/i.test(user)) return "printenv HOME";
+  if (/calendar/i.test(user)) return "cal";
+  if (/pdf/i.test(user) && path) return "find " + path + " -name '*.pdf'";
+  return "";
+}
+
+function salvageProgram(raw) {
+  const src = String(raw || "");
+  const start = src.search(/#include\s*</);
+  if (start < 0) return "";
+  let program = src.slice(start).replace(/```/g, "").trim();
+  const end = program.lastIndexOf("}");
+  if (end >= 0) program = program.slice(0, end + 1).trim();
+  if (!/#include|printf|puts/.test(program)) return "";
+  return program;
+}
+
 function repairReply(kind, raw, userText) {
   const thinkKinds = { think: 1, ask: 1, concat: 1, code: 1, clock: 1, weekday: 1, host: 1, who: 1, cwd: 1, disk: 1, listing: 1 };
   if (!thinkKinds[kind]) return String(raw || "");
-  const parsed = extractJson(raw);
-  if (parsed._raw) return String(raw || "");
   const user = String(userText || "");
-  let reason = typeof parsed.reason === "string" ? parsed.reason.trim() : "";
-  let display = typeof parsed.display === "string" ? parsed.display.trim() : "";
-  let cmd = typeof parsed.cmd === "string" ? parsed.cmd.trim() : "";
-  if (cmd === "null") cmd = "";
-  if (/cmd is null|put the (program|function|loop|city|word) in display/i.test(user)) return String(raw || "");
-  if (/\b2\s*\+\s*2\b|\bwhat is \d+/i.test(user)) return String(raw || "");
-  if (/write a .*(program|function)/i.test(user) && !/command/i.test(user)) return String(raw || "");
-  if (cmd) return String(raw || "");
-  const path = (user.match(/(\/[\w./-]+)/) || [])[1] || "";
-  if (/tomorrow|what time|what day|what date/i.test(user)) cmd = "date -d tomorrow";
-  else if (/hostname/i.test(user)) cmd = "hostname";
-  else if (/who is logged|logged in/i.test(user)) cmd = "whoami";
-  else if (/directory am i|current directory/i.test(user)) cmd = "pwd";
-  else if (/disk space|how much disk/i.test(user)) cmd = "df -h";
-  else if (/list the files|list files/i.test(user) && path) cmd = "ls -la " + path;
-  else if (path && /read|report|show the first|how many words|what kind of file/i.test(user)) cmd = "sed -n '1,160p' " + path;
-  else if (/python/i.test(user) && /concatenat/i.test(user)) cmd = "python3 -c \"print('ok')\"";
-  else if (/\buptime\b|been up/i.test(user)) cmd = "uptime";
-  else if (/memory is free|how much memory/i.test(user)) cmd = "free -h";
-  else if (/kernel/i.test(user)) cmd = "uname -r";
-  else if (/ip address/i.test(user)) cmd = "hostname -I";
-  else if (/processes are running/i.test(user)) cmd = "ps aux";
-  else if (/home directory/i.test(user)) cmd = "printenv HOME";
-  else if (/calendar/i.test(user)) cmd = "cal";
-  else if (/pdf/i.test(user) && path) cmd = "find " + path + " -name '*.pdf'";
-  if (!cmd) return String(raw || "");
-  if (/I have (read|reported|listed)|already (read|listed)|cannot|can't|lack access|not available|real-time/i.test(display)) {
-    display = "I will run it after you approve.";
+  const source = String(raw || "");
+  const parsed = extractJson(source);
+  const leave = /cmd is null|put the (program|function|loop|city|word) in display/i.test(user) || /\b2\s*\+\s*2\b|\bwhat is \d+/i.test(user);
+  if (leave && !parsed._raw) return source;
+  const wantsProgram = /write a .*(program|function)/i.test(user) && !/command/i.test(user);
+  if (wantsProgram) {
+    const fromJson = !parsed._raw && typeof parsed.display === "string" ? parsed.display : "";
+    const program = /#include|printf|puts/.test(fromJson) ? fromJson : salvageProgram(source);
+    if (program) {
+      return JSON.stringify({ reason: "They asked to see the program.", display: program, cmd: null });
+    }
+    if (!parsed._raw) return source;
   }
-  return JSON.stringify({ reason: reason || "This PC can answer with one command.", display: display || "I will run it after you approve.", cmd: cmd });
+  let reason = !parsed._raw && typeof parsed.reason === "string" ? parsed.reason.trim() : "";
+  let display = !parsed._raw && typeof parsed.display === "string" ? parsed.display.trim() : "";
+  let cmd = !parsed._raw && typeof parsed.cmd === "string" ? parsed.cmd.trim() : "";
+  if (cmd === "null") cmd = "";
+  const blob = reason + " " + display + " " + (parsed._raw ? source : "");
+  const refused = /cannot|can't|lack access|not available|real-time|do not have|don't have|unable/i.test(blob);
+  const pretended = /I have (read|reported|listed)|already (read|listed)/i.test(blob);
+  const machine = /tomorrow|what time|what day|hostname|who is logged|logged in|directory am i|current directory|disk space|how much disk|list the files|list files/i.test(user);
+  const strict = machine || kind === "clock" || kind === "weekday" || kind === "host" || kind === "who" || kind === "cwd" || kind === "disk" || kind === "listing";
+  if (cmd && !parsed._raw && !pretended && !(strict && refused)) return source;
+  if (!cmd) cmd = machineCmd(user);
+  if (!cmd) return source;
+  if (pretended || (strict && refused) || !reason) reason = "This PC can answer with one command.";
+  if (pretended || (strict && refused) || !display) display = "I will run it after you approve.";
+  return JSON.stringify({ reason: reason, display: display, cmd: cmd });
 }
 
 function parseThink(raw, userText) {
@@ -2006,7 +2034,9 @@ function runUnitTests() {
   check("repair who", scoreWorkflow("who", repairReply("who", '{"reason":"whoami","display":"I will ask.","cmd":null}', "User: who is logged in on this PC?")).ok === true);
   check("repair cwd", scoreWorkflow("cwd", repairReply("cwd", '{"reason":"pwd","display":"I will ask.","cmd":null}', "User: what directory am I in right now?")).ok === true);
   check("repair disk", scoreWorkflow("disk", repairReply("disk", '{"reason":"df","display":"I will ask.","cmd":null}', "User: how much disk space is free?")).ok === true);
-  check("repair listing", scoreWorkflow("listing", repairReply("listing", '{"reason":"ls /tmp","display":"I will list it.","cmd":null}', "User: list the files in /tmp")).ok === true);
+  check("repair clock refusal in the reason", scoreWorkflow("clock", repairReply("clock", '{"reason":"I cannot determine the time. Real-time access is not available.","display":"No.","cmd":"date"}', "User: what time is it tomorrow?\nThe first character of your reply is {.")).ok === true);
+  check("repair who refusal", scoreWorkflow("who", repairReply("who", '{"reason":"I cannot access the user account.","display":"Unavailable.","cmd":null}', "User: who is logged in on this PC?\nThe first character of your reply is {.")).ok === true);
+  check("repair broken C program", scoreWorkflow("code", repairReply("code", '{A simple C program that prints "hello world" is as follows: {display}: #include <stdio.h>\nint main(void) { printf("hello world\\n"); return 0; }', "User: write a simple C program that prints hello world\nThe first character of your reply is {.")).ok === true);
   check("markup knows it is format", /pressed Format/.test(SYSTEM_MARKUP) && /Do not invent files/.test(SYSTEM_MARKUP));
   check("copied sample is rejected", copiedFromPrompt("display information about this os", { reason: "I have not read the file the user named, so I cannot summarize it yet.", display: "I'll read the whole file.", cmd: "cat /tmp/lib.js" }));
   check("intro is not the answer", thinAnswer({ display: "Here is a simple C program that prints 'hello world':", cmd: null, plan: null }));
