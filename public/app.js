@@ -252,7 +252,7 @@ function renderPlan(host) {
     const c = document.createElement("div");
     c.className = "hint";
     c.style.padding = "8px 10px";
-    c.textContent = "Checkpoint: " + (check.ok ? "ok" : "not ok") + " — " + (check.why || "");
+    c.textContent = check.ok ? check.why : "Not done. " + (check.why || "the expect was not met");
     wrap.appendChild(c);
   }
   host.appendChild(wrap);
@@ -407,14 +407,8 @@ async function runPlanStep(host) {
         renderPlan(host);
         return;
       }
-      check = {
-        ok: false,
-        why: "This step needs you.",
-        ask: (d.emit && d.emit.ask) || step.need || step.do,
-        replan: false,
-        startOver: false,
-      };
-      renderPlan(host);
+      addMsg("bot", (d.emit && d.emit.ask) || "This step has no command yet, and state does not have what it needs.");
+      return;
     } finally {
       setBusy(false);
     }

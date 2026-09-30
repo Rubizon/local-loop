@@ -315,29 +315,63 @@ function heuristicEmit(step, context) {
   return null;
 }
 
-function heuristicCheck(step, result, context) {
-  const big = overflow(context, result.stdout || "");
+function probeWrittenPdf(cmd) {
+  const m = String(cmd || "").match(/open\('([^']+\.pdf)'/);
+  if (!m) return null;
+  try {
+    const buf = fs.readFileSync(m[1]);
+    return { path: m[1], ok: buf.slice(0, 5).toString() === "%PDF-" };
+  } catch (_) {
+    return { path: m[1], ok: false, err: "pdf file was not written" };
+  }
+}
+
+function judge(step, result, probe) {
   const stdout = String((result && result.stdout) || "");
+  const stderr = String((result && result.stderr) || "").trim();
   const failed = !result || result.code !== 0;
-  const expectFile = /pdf|file exists|written|created/i.test(String(step.expect || "") + " " + String(step.do || ""));
-  const expectList = !expectFile && /list|listing|names|directory/i.test(String(step.expect || ""));
-  const quietWrite = /pdf|open\(|\.pdf|>\s*\S+|tee\b/i.test(String((result && result.cmd) || ""));
-  let ok = !failed;
-  if (expectList) ok = ok && (listingNames(stdout).length > 0 || stdout.trim().length > 10);
-  else if (!expectFile && !quietWrite) ok = ok && stdout.trim().length > 0;
-  const attach = big ? "summary" : step.attach || "summary";
-  const fact = attach === "none" ? "" : summarizeOutput(result.cmd, stdout);
-  const goal = keepLines(context).find((l) => /GOAL:/i.test(l)) || step.do;
+  const about = String((step && step.expect) || "") + " " + String((step && step.do) || "");
+  const wantsPdf = /pdf/i.test(about);
+  const wantsList = !wantsPdf && /name|listing|\blist\b|directory/i.test(about);
+  if (wantsPdf) {
+    if (probe && probe.ok) return { ok: true, why: "pdf file exists", summary: "pdf: " + probe.path };
+    return { ok: false, why: (probe && probe.err) || stderr || "pdf file was not written", summary: "" };
+  }
+  const summary = summarizeOutput((result && result.cmd) || "", stdout);
+  if (wantsList) {
+    const names = listingNames(stdout);
+    if (!failed && names.length) return { ok: true, why: names.length + " names", summary: summary };
+    return { ok: false, why: stderr || "listing had no names", summary: "" };
+  }
+  if (failed) return { ok: false, why: stderr || "command failed", summary: "" };
+  if (!stdout.trim() && !/pdf|open\(|\.pdf|>\s*\S+/i.test(String((result && result.cmd) || ""))) {
+    return { ok: false, why: "command printed nothing", summary: "" };
+  }
+  return { ok: true, why: "command finished", summary: summary };
+}
+
+function heuristicCheck(step, result, context, probe) {
+  const decided = judge(step, result, probe);
+  const big = overflow(context, (result && result.stdout) || "");
   return {
-    ok,
-    why: ok ? "output matches expect" : failed ? "command failed" : "expect not met",
+    ok: decided.ok,
+    why: decided.why,
     ask: null,
-    replan: !ok,
+    replan: !decided.ok,
     startOver: false,
-    next: ok ? "next" : step.id,
-    attach,
-    context: ok ? clipContext((/^KEEP/.test(goal) ? goal : "KEEP GOAL: " + goal) + (fact ? "\nFACT: " + fact : "")) : context,
+    next: decided.ok ? "next" : step.id,
+    attach: big ? "summary" : (step && step.attach) || "summary",
+    summary: decided.summary,
+    context: context,
   };
+}
+
+function armNext(plan, stateText) {
+  const step = currentStep(plan);
+  if (!step || step.cmd) return plan;
+  const emit = heuristicEmit(step, stateText);
+  if (!emit || !emit.cmd) return plan;
+  return { ...plan, steps: plan.steps.map((s) => (s.id === step.id ? { ...s, cmd: emit.cmd } : s)) };
 }
 
 function stepState(plan, step, result, ok, prev) {
@@ -579,9 +613,25 @@ function runUnitTests() {
   const quiet = heuristicCheck(
     { id: "2", do: "Write a PDF summary of those names", expect: "pdf file exists", attach: "paths" },
     { cmd: "python3 -c \"open('/tmp/tmp-summary.pdf','wb').write(b'')\"", code: 0, stdout: "" },
-    "KEEP GOAL: x",
+    "KEEP GOAL: x\nFACT: names (2): alpha, beta",
   );
-  check("quiet pdf write ok", quiet.ok === true);
+  check("pdf needs the file", quiet.ok === false && /not written/.test(quiet.why));
+  const wrote = heuristicCheck(
+    { id: "2", do: "Write a PDF summary of those names", expect: "pdf file exists", attach: "paths" },
+    { cmd: "python3 -c \"open('/tmp/tmp-summary.pdf','wb').write(b'')\"", code: 0, stdout: "" },
+    "KEEP GOAL: x\nFACT: names (2): alpha, beta",
+    { ok: true, path: "/tmp/tmp-summary.pdf" },
+  );
+  check("pdf file passes", wrote.ok === true && /pdf:/.test(wrote.summary));
+  const afterList = stepState(
+    mark(pdfPlan, "1", "todo"),
+    pdfPlan.steps[0],
+    { cmd: "ls -la /tmp", code: 0, stdout: "alpha\nbeta\n" },
+    true,
+    "",
+  );
+  const armed = armNext(advance(mark(pdfPlan, "1", "ok"), "next"), afterList);
+  check("next command is armed from state", armed.steps[1].cmd && /tmp-summary\.pdf/.test(armed.steps[1].cmd) && /alpha/.test(afterList));
   const emit = heuristicEmit(angry.steps[2], "KEEP GOAL: x\nFACT: I hate this bug. Furious.");
   check("emit csv", emit && /angry\.csv/.test(emit.cmd || ""));
   check("parseEmit", parseEmit('{"cmd":null,"ask":"where?"}').ask === "where?");
@@ -624,6 +674,9 @@ module.exports = {
   heuristicPlan,
   heuristicEmit,
   heuristicCheck,
+  judge,
+  probeWrittenPdf,
+  armNext,
   currentStep,
   mark,
   advance,

@@ -305,43 +305,21 @@ app.post("/api/check", async (req, res) => {
     const step = lib.currentStep(plan);
     if (!step) return res.status(400).json({ error: "no current step" });
     const context = loadContext();
-    let check = lib.heuristicCheck(step, result, context);
-    if (!check.ok) {
-      try {
-        const raw = await ollamaText(
-          lib.SYSTEM_CHECK,
-          [
-            "State:\n" + (context || "(empty)"),
-            "Goal: " + ((plan && plan.goal) || ""),
-            "Remaining: " + (plan.steps || []).filter((s) => s.status !== "ok" && s.id !== step.id).map((s) => s.do).join("; "),
-            `Step ${step.id}: ${step.do}`,
-            "Expect: " + step.expect,
-            `Command: ${result.cmd} exit ${result.code}`,
-            "Output:\n" + lib.clip(result.stdout || "", lib.overflow(context, result.stdout || "") ? 400 : 2500),
-          ].join("\n\n"),
-          280
-        );
-        const model = lib.parseCheck(raw, check.context);
-        if (!(result.code === 0 && model.ok === false && /pdf|open\(|\.pdf/i.test(String(result.cmd || "")))) {
-          check = { ...check, ...model, ok: model.ok, context: check.context };
-        }
-      } catch (_) {}
-    }
+    const probe = lib.probeWrittenPdf(result && result.cmd);
+    const check = lib.heuristicCheck(step, result, context, probe);
     if (check.ok && !check.ask) {
       const more = (plan.steps || []).some((s) => s.id !== step.id && s.status !== "ok");
       if (more && (check.next === "done" || check.next === step.id)) check.next = "next";
     }
-    const summary = lib.summarizeOutput(String((result && result.cmd) || ""), String((result && result.stdout) || ""));
+    const summary = check.summary || "";
     let stamped = plan;
-    if (summary && check.ok) {
+    if (summary) {
       stamped = {
         ...plan,
         steps: (plan.steps || []).map((s) => (s.id === step.id ? { ...s, note: summary } : s)),
       };
     }
     check.context = lib.stepState(stamped, step, result, check.ok, context);
-    if (lib.overflow(context, result.stdout || "") && check.attach === "full") check.attach = "summary";
-    const snippet = lib.applyAttach(check.attach, result.cmd, result);
     let nextPlan = lib.mark(stamped, step.id, check.ok ? "ok" : check.ask ? "ask" : "fail");
     if (check.startOver) {
       ledger = lib.rollbackAfter(ledger, null);
@@ -350,7 +328,7 @@ app.post("/api/check", async (req, res) => {
       ledger = lib.rollbackAfter(ledger, lastGoodStep);
     } else if (check.ok) {
       lastGoodStep = step.id;
-      nextPlan = lib.advance(nextPlan, check.next);
+      nextPlan = lib.armNext(lib.advance(nextPlan, check.next), check.context);
     }
     const report = check.ok ? lib.finishReport(nextPlan, result) : null;
     if (report) {
@@ -359,7 +337,7 @@ app.post("/api/check", async (req, res) => {
       lastGoodStep = oks.length ? oks[oks.length - 1].id : lastGoodStep;
     }
     saveContext(check.context);
-    res.json({ check, plan: nextPlan, snippet, report: report && report.text, cwd: sessionCwd });
+    res.json({ check, plan: nextPlan, report: report && report.text, cwd: sessionCwd });
   } catch (err) {
     res.status(500).json({ error: String(err.message || err) });
   }
