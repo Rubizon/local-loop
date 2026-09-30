@@ -43,14 +43,52 @@ Keep finished work. 1-5 remaining steps. Do not repeat done steps.`;
 const SYSTEM_THINK = `Think, then one JSON object. The first character is {.
 {"reason":"what you need, and why","display":"one sentence","cmd":"one shell command or null"}
 If you have not seen the thing the user asked about, do not describe it. Put the read in cmd.
-Example: {"reason":"The file has not been read, so I cannot report it yet.","display":"I'll read it first.","cmd":"sed -n '1,160p' /tmp/notes.txt"}
+Example: {"reason":"The file has not been read, so I cannot report it yet.","display":"I'll read it first.","cmd":"cat /tmp/notes.txt"}
 Question example: {"reason":"No file or command is needed.","display":"4","cmd":null}`;
 
 const SYSTEM_SAY = `Report the command output. JSON only. The first character is {.
 {"say":"plain sentences about what the output shows"}
 Use only the output. No KEEP, FACT, or NEXT.`;
 
+const SYSTEM_NOTE = `One JSON object. The first character is {.
+{"note":"one sentence of what this part adds"}
+Do not paste code.`;
+
 const MODEL_PROBE_USER = 'Reply with JSON only: {"display":"PING-OK","cmd":null}';
+
+function chunkText(text, size) {
+  const limit = size || 1600;
+  const lines = String(text || "").split("\n");
+  const chunks = [];
+  let buf = "";
+  const push = (part) => {
+    const bit = String(part || "");
+    if (bit.trim()) chunks.push(bit);
+  };
+  lines.forEach((line) => {
+    const next = buf ? buf + "\n" + line : line;
+    if (buf && next.length > limit) {
+      push(buf);
+      buf = line;
+    } else {
+      buf = next;
+    }
+    while (buf.length > limit) {
+      push(buf.slice(0, limit));
+      buf = buf.slice(limit);
+    }
+  });
+  push(buf);
+  return chunks;
+}
+
+function readPathFromCmd(cmd) {
+  const text = String(cmd || "");
+  if (!/\b(cat|sed|head|tail|less|more)\b/.test(text)) return null;
+  const paths = text.match(/\/(?:[A-Za-z0-9._-]+\/)*[A-Za-z0-9._-]+\.[A-Za-z0-9]+/g) || [];
+  const file = paths.filter((p) => !p.includes("..")).pop();
+  return file || null;
+}
 
 function clip(s, n) {
   const t = String(s || "");
@@ -1108,6 +1146,10 @@ function runUnitTests() {
   check("workflow ask no command", scoreWorkflow("ask", '{"reason":"I will list it.","display":"ok","cmd":"ls /tmp"}').ok === false);
   check("workflow say reports", scoreWorkflow("say", '{"say":"The file defines localTurn and speak."}').ok === true);
   check("workflow say not state", scoreWorkflow("say", '{"say":"KEEP GOAL: read it. NEXT: done."}').ok === false);
+  const parts = chunkText("one\ntwo\nthree\nfour", 8);
+  check("chunks cover the text", parts.length >= 2 && parts.join("\n").includes("one") && parts.join("\n").includes("four"));
+  check("read path from sed", readPathFromCmd("sed -n '1,160p' /home/user/local-loop/lib.js") === "/home/user/local-loop/lib.js");
+  check("read path ignores ls", readPathFromCmd("ls -la /tmp") === null);
   check("ok string is success", parseCheck('{"ok":"ok","why":"ok"}', "").ok === true);
   const emitted = heuristicEmit(pdfPlan.steps[1], stated);
   check("emit pdf", emitted && /tmp-summary\.pdf/.test(emitted.cmd || "") && pdfBytes("names").slice(0, 5).toString() === "%PDF-");
@@ -1196,8 +1238,11 @@ module.exports = {
   SYSTEM_REPLAN,
   SYSTEM_THINK,
   SYSTEM_SAY,
+  SYSTEM_NOTE,
   MODEL_PROBE_USER,
   clip,
+  chunkText,
+  readPathFromCmd,
   hasGoal,
   keepLines,
   clipContext,

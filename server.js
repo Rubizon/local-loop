@@ -95,6 +95,53 @@ function runCommand(cmd, cwd, stepId) {
   });
 }
 
+function loadReadText(cmd, stdout) {
+  const file = lib.readPathFromCmd(cmd);
+  const fallback = String(stdout || "");
+  if (!file) return fallback;
+  try {
+    const st = fs.statSync(file);
+    if (!st.isFile() || st.size > 400000) return fallback;
+    return fs.readFileSync(file, "utf8");
+  } catch (_) {
+    return fallback;
+  }
+}
+
+async function reduceReport(task, text) {
+  const chunks = lib.chunkText(text, 2200).slice(0, 28);
+  if (!chunks.length) return "";
+  const ask = lib.clip(task, 240);
+  if (chunks.length === 1) {
+    const parsed = lib.extractJson(await ollamaText(lib.SYSTEM_SAY, "Task: " + ask + "\n\nOutput:\n" + chunks[0], 280));
+    return typeof parsed.say === "string" ? parsed.say.trim() : "";
+  }
+  const notes = [];
+  for (let i = 0; i < chunks.length; i++) {
+    try {
+      const parsed = lib.extractJson(
+        await ollamaText(
+          lib.SYSTEM_NOTE,
+          "Task: " + ask + "\nPart " + (i + 1) + " of " + chunks.length + ":\n" + chunks[i],
+          80
+        )
+      );
+      const note = typeof parsed.note === "string" ? parsed.note.trim() : "";
+      if (note && !/\b(KEEP|FACT|NEXT)\b/.test(note)) notes.push(note);
+    } catch (_) {}
+  }
+  if (!notes.length) return "";
+  const parsed = lib.extractJson(
+    await ollamaText(
+      lib.SYSTEM_SAY,
+      "Task: " + ask + "\n\nNotes from the file, in order:\n" + notes.map((n, i) => i + 1 + ". " + n).join("\n"),
+      320
+    )
+  );
+  const say = typeof parsed.say === "string" ? parsed.say.trim() : "";
+  return say || notes.join(" ");
+}
+
 async function ollamaText(system, user, numPredict = 280) {
   const res = await fetch(`${OLLAMA_HOST}/api/chat`, {
     method: "POST",
@@ -415,7 +462,16 @@ app.post("/api/check", async (req, res) => {
       const more = (plan.steps || []).some((s) => s.id !== step.id && s.status !== "ok");
       if (more && (check.next === "done" || check.next === step.id)) check.next = "next";
     }
-    const summary = check.summary || "";
+    const summarySeed = check.summary || "";
+    let reportText = "";
+    if (plan && plan.fromModel && check.ok) {
+      try {
+        reportText = await reduceReport(plan.ask || plan.goal || "", loadReadText(result && result.cmd, result && result.stdout));
+      } catch (_) {
+        reportText = "";
+      }
+    }
+    const summary = reportText ? lib.clip(reportText.replace(/\s+/g, " "), 360) : summarySeed;
     let stamped = plan;
     if (summary) {
       stamped = {
@@ -423,7 +479,8 @@ app.post("/api/check", async (req, res) => {
         steps: (plan.steps || []).map((s) => (s.id === step.id ? { ...s, note: summary } : s)),
       };
     }
-    check.context = lib.stepState(stamped, step, result, check.ok, context);
+    const stateResult = reportText ? { ...(result || {}), stdout: summary } : result;
+    check.context = lib.stepState(stamped, step, stateResult, check.ok, context);
     let nextPlan = lib.mark(stamped, step.id, check.ok ? "ok" : check.ask ? "ask" : "fail");
     if (check.startOver) {
       ledger = lib.rollbackAfter(ledger, null);
@@ -450,23 +507,8 @@ app.post("/api/check", async (req, res) => {
       result: result,
       cwd: sessionCwd,
     });
-    if (plan && plan.fromModel && check.ok) {
-      try {
-        const raw = await ollamaText(
-          lib.SYSTEM_SAY,
-          [
-            "Task: " + (plan.ask || ""),
-            "Command: " + ((result && result.cmd) || ""),
-            "Output:\n" + lib.clip((result && result.stdout) || "", 2500),
-          ].join("\n\n"),
-          400
-        );
-        const said = lib.extractJson(raw).say;
-        if (typeof said === "string" && said.trim()) say = said.trim();
-      } catch (_) {
-        say = "I ran it, but I could not turn the output into a report.";
-      }
-    }
+    if (reportText) say = reportText;
+    else if (plan && plan.fromModel && check.ok) say = "I read it, but I could not summarize it.";
     saveContext(check.context);
     res.json({ check, plan: nextPlan, report: ending, say: say, done: !!ending, cwd: sessionCwd });
   } catch (err) {
