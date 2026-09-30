@@ -659,7 +659,9 @@ function looseBrace(raw) {
 
 function shellish(cmd) {
   const text = String(cmd || "").trim();
-  if (!text || text.length > 160) return false;
+  if (!text) return false;
+  if (/[\n\r]/.test(text)) return text.length <= 8000 && !/^(the|this|a|an|i)\b/i.test(text);
+  if (text.length > 160) return false;
   if (/^(the|this|a|an|i)\b/i.test(text)) return false;
   return text.split(/\s+/).length <= 16;
 }
@@ -1270,7 +1272,6 @@ function advance(plan, next) {
 function assertSafeCmd(cmd) {
   const s = String(cmd || "").trim();
   if (!s) throw new Error("empty command");
-  if (/[\n\r]/.test(s)) throw new Error("multi-line commands blocked");
   if (DENY_CMD.test(s)) throw new Error("blocked command: " + s);
   return s;
 }
@@ -2169,6 +2170,7 @@ function runUnitTests() {
   check("summarize ls", /aider/.test(summarizeOutput("ls -la /tmp", "total 1\ndrwx aider")));
   const many = Array.from({ length: 20 }, (_, i) => "f" + i).join("\n");
   check("summarize ls caps", /\+8/.test(summarizeOutput("ls /tmp", many)) && summarizeOutput("ls /tmp", many).length < 200);
+  check("multi-line command is allowed", assertSafeCmd("printf '%s\\n' Monday Tuesday > days.txt\necho done").indexOf("\n") > 0);
   check("deny sudo", (() => { try { assertSafeCmd("sudo ls"); return false; } catch (_) { return true; } })());
   const p = heuristicPlan("list /tmp then write a report");
   check("heuristic plan", p && p.steps.length === 2);
