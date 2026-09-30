@@ -533,8 +533,9 @@ function showReason(box, text) {
 
 function actionTitle(step) {
   const text = String((step && step.do) || "");
-  if (/pdf/i.test(text)) return "Create PDF";
-  if (/\blist\b|\bls\b/i.test(text)) return "List files";
+  const cmd = String((step && step.cmd) || "").trim();
+  if (/pdf/i.test(text) || /\.pdf\b/.test(cmd)) return "Create PDF";
+  if (/^(ls|find|tree)\b/.test(cmd)) return "List files";
   return text || "Run command";
 }
 

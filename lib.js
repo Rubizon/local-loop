@@ -1055,13 +1055,20 @@ function probeWrittenPdf(cmd) {
   }
 }
 
+function listingCommand(cmd) {
+  const text = String(cmd || "").trim();
+  if (!text || /(?:>>?|\btee\b)/.test(text) || /open\(|\.write\(/.test(text)) return false;
+  const head = text.split(/\s*(?:&&|\|\||;|\|)\s*/)[0] || "";
+  return /^(ls|find|tree)\b/.test(head);
+}
+
 function judge(step, result, probe) {
   const stdout = String((result && result.stdout) || "");
   const stderr = String((result && result.stderr) || "").trim();
   const failed = !result || result.code !== 0;
   const about = String((step && step.expect) || "") + " " + String((step && step.do) || "");
   const wantsPdf = /pdf/i.test(about);
-  const wantsList = !wantsPdf && /name|listing|\blist\b|directory/i.test(about);
+  const wantsList = !wantsPdf && listingCommand(result && result.cmd);
   if (wantsPdf) {
     if (probe && probe.ok) return { ok: true, why: "pdf file exists", summary: "pdf: " + probe.path };
     return { ok: false, why: (probe && probe.err) || stderr || "pdf file was not written", summary: "" };
@@ -2170,6 +2177,8 @@ function runUnitTests() {
   check("summarize ls", /aider/.test(summarizeOutput("ls -la /tmp", "total 1\ndrwx aider")));
   const many = Array.from({ length: 20 }, (_, i) => "f" + i).join("\n");
   check("summarize ls caps", /\+8/.test(summarizeOutput("ls /tmp", many)) && summarizeOutput("ls /tmp", many).length < 200);
+  check("a write is not a failed listing", judge({ do: "I will generate a list of workdays and save it to the file foo.txt.", expect: "the command output" }, { cmd: "date -d 'next monday' > foo.txt", code: 0, stdout: "", stderr: "" }).ok === true);
+  check("an empty listing still fails", judge({ do: "List /tmp", expect: "names" }, { cmd: "ls -la /tmp", code: 0, stdout: "", stderr: "" }).ok === false);
   check("multi-line command is allowed", assertSafeCmd("printf '%s\\n' Monday Tuesday > days.txt\necho done").indexOf("\n") > 0);
   check("deny sudo", (() => { try { assertSafeCmd("sudo ls"); return false; } catch (_) { return true; } })());
   const p = heuristicPlan("list /tmp then write a report");
