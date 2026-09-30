@@ -75,7 +75,18 @@ async function main() {
   try {
     const probe = await runWorkflow();
     console.log(`model ${probe.model} ${probe.passed}/${probe.total}`);
-    if (!probe.ok) process.exitCode = 2;
+    const live = [];
+    for (const s of lib.USER_SCENARIOS) {
+      if (s.harness) continue;
+      const started = Date.now();
+      const raw = await chat(s.system, s.user, s.predict);
+      const ok = !!s.pass(raw);
+      live.push({ name: s.name, ok, ms: Date.now() - started, raw: lib.clip(String(raw).replace(/\s+/g, " "), 160) });
+      console.log(`  ${ok ? "PASS" : "FAIL"} ${s.name}${ok ? "" : "  " + live[live.length - 1].raw}`);
+    }
+    const got = live.filter((r) => r.ok).length;
+    console.log(`scenarios ${got}/${live.length}`);
+    if (!probe.ok || got !== live.length) process.exitCode = 2;
   } catch (err) {
     console.log("model probe skipped/failed:", err.message);
     if (process.argv.includes("--require-model")) process.exitCode = 2;
