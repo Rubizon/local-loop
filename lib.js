@@ -6,10 +6,11 @@ const CONTEXT_MAX_LINES = 12;
 const NUM_CTX = Number(process.env.OLLAMA_NUM_CTX || 8192);
 const DENY_CMD = /(\bsudo\b|\brm\s+-rf\s+\/|\bmkfs\b|\bdd\s+if=|\bchmod\s+-R\s+777|\bchown\s+-R\s+|\bcurl\b[^|&;]*\|\s*(sh|bash)|:\(\)\s*\{)/i;
 
-const SYSTEM_A = `Direct mode. JSON only:
-{"display":"what the human should read","cmd":null}
-cmd is at most one shell command. Omit or null if none.
-Do not edit working context. Do not invent files not in the user text or attached output.`;
+const SYSTEM_A = `Output one JSON object and nothing else. The first character is {.
+{"display":"short answer","cmd":null}
+cmd is one shell command, or null when no command is needed.
+Example: {"display":"Hello.","cmd":null}
+Do not invent files.`;
 
 const SYSTEM_REWRITE = `Rewrite the whole working context. JSON only:
 {"context":"multiline text"}
@@ -26,11 +27,10 @@ One command per step. cmd null only to ask the user.
 After each command the checkpoint reads the output and rewrites state. Do not add a step that asks the user to save output.
 attach is what that rewrite keeps: summary for listings, paths for files written, none if state should not change.`;
 
-const SYSTEM_CHECK = `Checkpoint a plan step. JSON only:
-{"ok":true,"why":"one line","ask":null,"replan":false,"startOver":false,"next":"next","attach":"none|paths|summary|full","context":"full rewritten context"}
-ok if output matches expect. next means the following step. done only when no step remains.
-If output is huge, attach=summary (not full).
-KEEP rules as in rewrite. startOver if the task cannot continue and files should roll back.`;
+const SYSTEM_CHECK = `Output one JSON object and nothing else. The first character is {.
+{"ok":true,"why":"one line"}
+ok is true only when the output matches the expect. Do not rewrite state.
+Example: {"ok":true,"why":"names found"}`;
 
 const SYSTEM_EMIT = `Emit ONE command for this step, or ask. JSON only:
 {"cmd":"one shell command or null","ask":"question or null"}
@@ -605,13 +605,13 @@ function scoreWorkflow(kind, raw) {
 }
 
 const WORKFLOW_PROBES = [
-  { kind: "direct", system: SYSTEM_A, user: "User: say hello. Do not run a command.", predict: 80 },
+  { kind: "direct", system: SYSTEM_A, user: "Say hello. No shell command.\nThe first character of your reply is {.", predict: 120 },
   { kind: "plan", system: SYSTEM_PLAN, user: "User: list /tmp and then write a one-page PDF summary of the names.", predict: 420 },
   {
     kind: "check",
     system: SYSTEM_CHECK,
-    user: "Step 1: List /tmp\nExpect: names from /tmp\nCommand: ls -la /tmp exit 0\nOutput:\nalpha\nbeta",
-    predict: 220,
+    user: "Expect: names from /tmp\nCommand: ls -la /tmp\nExit: 0\nOutput:\nalpha\nbeta\nThe first character of your reply is {.",
+    predict: 80,
   },
   {
     kind: "emit",
@@ -691,7 +691,7 @@ function runUnitTests() {
   const emit = heuristicEmit(angry.steps[2], "KEEP GOAL: x\nFACT: I hate this bug. Furious.");
   check("emit csv", emit && /angry\.csv/.test(emit.cmd || ""));
   check("parseEmit", parseEmit('{"cmd":null,"ask":"where?"}').ask === "where?");
-  check("system compact", SYSTEM_A.length < 500 && SYSTEM_REWRITE.includes("KEEP GOAL") && SYSTEM_EMIT.includes("JSON"));
+  check("system compact", SYSTEM_A.length < 500 && SYSTEM_CHECK.length < 400 && SYSTEM_A.includes("Hello.") && SYSTEM_CHECK.includes('"ok":true') && SYSTEM_REWRITE.includes("KEEP GOAL") && SYSTEM_EMIT.includes("JSON"));
   return { ok: results.every((r) => r.ok), passed: results.filter((r) => r.ok).length, total: results.length, results };
 }
 
