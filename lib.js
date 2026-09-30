@@ -28,9 +28,10 @@ After each command the checkpoint reads the output and rewrites state. Do not ad
 attach is what that rewrite keeps: summary for listings, paths for files written, none if state should not change.`;
 
 const SYSTEM_CHECK = `Output one JSON object and nothing else. The first character is {.
-{"ok":true,"why":"one line"}
-ok is false when the output is an error, empty, or does not answer the task.
-Example: {"ok":false,"why":"the file was not summarized"}`;
+{"ok":false,"why":"one line"}
+Use "ok":true only when the command succeeded and answers the task.
+why must name the actual error. Never write the words "one line".
+An error or a missing file is not ok. Do not copy the example.`;
 
 const SYSTEM_EMIT = `Emit ONE command for this step, or ask. JSON only:
 {"cmd":"one shell command or null","ask":"question or null"}
@@ -938,6 +939,30 @@ function diagnoseReply(kind, raw) {
     if (!/localTurn|speak/.test(say)) return "report ignores the output. Starts: " + clip(say, 80);
     return "reports the output";
   }
+  if (kind === "note") {
+    const note = typeof parsed.note === "string" ? parsed.note.trim() : "";
+    if (!note) return "JSON has no note. Keys: " + keys;
+    if (/\b(KEEP|FACT|NEXT)\b/.test(note)) return "note recites state";
+    if (/[{}]/.test(note) || /^\s*(function|def)\b/.test(note) || note.length > 240) return "note pastes the source";
+    return "one short note";
+  }
+  if (kind === "verdict") {
+    const flag = asOk(parsed.ok);
+    const why = typeof parsed.why === "string" ? parsed.why.trim() : "";
+    if (flag !== false) return "did not reject a failed command. ok=" + flag;
+    if (!why || /^one line\.?$/i.test(why)) return "rejected without a real reason";
+    return "rejects the error";
+  }
+  if (kind === "concat") {
+    const reason = typeof parsed.reason === "string" ? parsed.reason.trim() : "";
+    const display = typeof parsed.display === "string" ? parsed.display.trim() : "";
+    const cmd = typeof parsed.cmd === "string" ? parsed.cmd.trim() : "";
+    if (!reason) return "JSON has no reason. Keys: " + keys;
+    if (!cmd) return "reason but no command. Reason: " + clip(reason, 80);
+    if (!/python/.test(cmd)) return "command is not python: " + clip(cmd, 70);
+    if (display.startsWith("{")) return "display is raw JSON";
+    return "python command with a reason";
+  }
   return "unknown probe";
 }
 
@@ -1059,6 +1084,23 @@ function scoreWorkflow(kind, raw) {
     const say = typeof parsed.say === "string" ? parsed.say.trim() : "";
     ok = !!say && !/\b(KEEP|FACT|NEXT)\b/.test(say) && /localTurn|speak/.test(say);
     detail = ok ? "reports the output" : diagnosis;
+  } else if (kind === "note") {
+    name = "Note";
+    const note = typeof parsed.note === "string" ? parsed.note.trim() : "";
+    ok = !!note && note.length <= 240 && !/\b(KEEP|FACT|NEXT)\b/.test(note) && !/[{}]/.test(note) && !/^\s*(function|def)\b/.test(note);
+    detail = ok ? "short note" : diagnosis;
+  } else if (kind === "verdict") {
+    name = "Verdict";
+    const why = typeof parsed.why === "string" ? parsed.why.trim() : "";
+    ok = asOk(parsed.ok) === false && !!why && !/^one line\.?$/i.test(why);
+    detail = ok ? "rejects the error" : diagnosis;
+  } else if (kind === "concat") {
+    name = "Concat";
+    const reason = typeof parsed.reason === "string" && parsed.reason.trim();
+    const display = typeof parsed.display === "string" ? parsed.display.trim() : "";
+    const cmd = typeof parsed.cmd === "string" ? parsed.cmd.trim() : "";
+    ok = !!(reason && /python/.test(cmd) && !display.startsWith("{"));
+    detail = ok ? "python command" : diagnosis;
   } else {
     detail = "unknown probe";
   }
@@ -1097,6 +1139,24 @@ const WORKFLOW_PROBES = [
     system: SYSTEM_SAY,
     user: "Task: read this file and report /tmp/lib.js\nCommand: sed -n '1,40p' /tmp/lib.js\nOutput:\nfunction localTurn(text) {\n  return 1;\n}\nfunction speak(opts) {}\nThe first character of your reply is {.",
     predict: 200,
+  },
+  {
+    kind: "note",
+    system: SYSTEM_NOTE,
+    user: "Task: summarize lib.js\nPart 1 of 3:\nfunction localTurn(text) {\n  return 1;\n}\nThe first character of your reply is {.",
+    predict: 80,
+  },
+  {
+    kind: "verdict",
+    system: SYSTEM_CHECK,
+    user: "Task: concatenate the files\nExpect: one python command ran\nWhat came back:\npython3: can't open file 'missing.py': [Errno 2] No such file or directory\nThe first character of your reply is {.",
+    predict: 80,
+  },
+  {
+    kind: "concat",
+    system: SYSTEM_THINK,
+    user: "User: write a short python command to concatenate all files in a directory.\nThe first character of your reply is {. Keep the JSON short.",
+    predict: 220,
   },
 ];
 
@@ -1191,6 +1251,13 @@ function runUnitTests() {
   check("workflow ask no command", scoreWorkflow("ask", '{"reason":"I will list it.","display":"ok","cmd":"ls /tmp"}').ok === false);
   check("workflow say reports", scoreWorkflow("say", '{"say":"The file defines localTurn and speak."}').ok === true);
   check("workflow say not state", scoreWorkflow("say", '{"say":"KEEP GOAL: read it. NEXT: done."}').ok === false);
+  check("workflow note is short", scoreWorkflow("note", '{"note":"This part defines a function localTurn that returns 1."}').ok === true);
+  check("workflow note rejects a paste", scoreWorkflow("note", '{"note":"function localTurn(text) { return 1; }"}').ok === false);
+  check("workflow verdict rejects", scoreWorkflow("verdict", '{"ok":false,"why":"the script was missing"}').ok === true);
+  check("workflow verdict placeholder", scoreWorkflow("verdict", '{"ok":false,"why":"one line"}').ok === false);
+  check("workflow verdict accepts error", scoreWorkflow("verdict", '{"ok":true,"why":"fine"}').ok === false);
+  check("workflow concat", scoreWorkflow("concat", '{"reason":"The files have not been joined.","display":"I will concatenate them.","cmd":"python3 -c \\"print(1)\\""}').ok === true);
+  check("workflow concat needs python", scoreWorkflow("concat", '{"reason":"ok","display":"I will list them.","cmd":"ls"}').ok === false);
   const parts = chunkText("one\ntwo\nthree\nfour", 8);
   check("chunks cover the text", parts.length >= 2 && parts.join("\n").includes("one") && parts.join("\n").includes("four"));
   check("read path from sed", readPathFromCmd("sed -n '1,160p' /home/user/local-loop/lib.js") === "/home/user/local-loop/lib.js");
