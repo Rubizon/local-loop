@@ -113,8 +113,19 @@ main {
   border-bottom: 1px solid #2a2a2a;
 }
 .plan-row.current { background: #262626; }
-.plan-k { color: #d4d4d4; margin-right: 8px; }
+.cmd {
+  margin: 0;
+  padding: 12px;
+  max-height: 220px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  background: #111;
+}
 .next-note { padding: 8px 12px; }
+.next-note:empty { display: none; }
 .term {
   margin-top: 10px;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;

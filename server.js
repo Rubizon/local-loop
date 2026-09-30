@@ -299,8 +299,7 @@ app.post("/api/check", async (req, res) => {
     if (!step) return res.status(400).json({ error: "no current step" });
     const context = loadContext();
     let check = lib.heuristicCheck(step, result, context);
-    const produced = result.code === 0 && String(result.stdout || "").trim();
-    if (!check.ok || !produced) {
+    if (!check.ok) {
       try {
         const raw = await ollamaText(
           lib.SYSTEM_CHECK,
@@ -316,8 +315,8 @@ app.post("/api/check", async (req, res) => {
           280
         );
         const model = lib.parseCheck(raw, check.context);
-        if (!(check.ok && produced && model.ok === false)) {
-          check = { ...check, ...model, context: check.context };
+        if (!(result.code === 0 && model.ok === false && /pdf|open\(|\.pdf/i.test(String(result.cmd || "")))) {
+          check = { ...check, ...model, ok: model.ok, context: check.context };
         }
       } catch (_) {}
     }
@@ -325,7 +324,7 @@ app.post("/api/check", async (req, res) => {
       const more = (plan.steps || []).some((s) => s.id !== step.id && s.status !== "ok");
       if (more && (check.next === "done" || check.next === step.id)) check.next = "next";
     }
-    check.context = lib.stepState(plan, step, result, check.ok);
+    check.context = lib.stepState(plan, step, result, check.ok, context);
     if (lib.overflow(context, result.stdout || "") && check.attach === "full") check.attach = "summary";
     const snippet = lib.applyAttach(check.attach, result.cmd, result);
     let nextPlan = lib.mark(plan, step.id, check.ok ? "ok" : check.ask ? "ask" : "fail");

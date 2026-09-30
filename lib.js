@@ -93,16 +93,20 @@ function finalizeRewrite(oldText, proposed, userText) {
   return text;
 }
 
-function pickMode(text, context, forced) {
+function wantsPlan(text) {
+  const t = String(text || "");
+  if (/\b(pdf|zip|csv|xlsx|excel)\b/i.test(t)) return true;
+  if (/\b(ls|cat|grep|find|mkdir|python|bash)\b/.test(t)) return true;
+  if (/\b(then|and then|after that|step by step|pipeline)\b/i.test(t)) return true;
+  if (/\b(list|show|go to|write|create|save)\b/i.test(t) && /\b(file|files|dir|directory|folder|\/tmp|\/)\b/i.test(t)) return true;
+  return false;
+}
+
+function pickMode(text, context) {
   const t = String(text || "").trim();
-  if (forced === "A" || forced === "B") return { mode: forced, why: "user" };
-  if (/^\s*(plan|task)\s*:/i.test(t)) return { mode: "B", why: "forced plan" };
-  if (/^\s*(ask|do|one)\s*:/i.test(t)) return { mode: "A", why: "forced direct" };
-  if (/\b(then|and then|after that|collect\b.+\band\b|zip\b|excel|xlsx|csv\b|for all|every |step by step|pipeline|search all)\b/i.test(t)) {
-    return { mode: "B", why: "multi-step language" };
-  }
+  if (wantsPlan(t)) return { mode: "B", why: "command" };
   if (hasGoal(context) && /\b(continue|next step|resume|the plan)\b/i.test(t)) return { mode: "B", why: "resume plan" };
-  return { mode: "A", why: "direct default" };
+  return { mode: "A", why: "direct" };
 }
 
 function extractJson(text) {
@@ -313,16 +317,20 @@ function heuristicEmit(step, context) {
 
 function heuristicCheck(step, result, context) {
   const big = overflow(context, result.stdout || "");
-  const empty = !(result.stdout || "").trim() || result.code !== 0;
-  const names = listingNames(result.stdout || "");
-  const expectList = /list|name|listing|file|nonempty|at least|match/i.test(step.expect);
-  const ok = !empty && (!expectList || names.length > 0 || String(result.stdout || "").length > 10);
+  const stdout = String((result && result.stdout) || "");
+  const failed = !result || result.code !== 0;
+  const expectFile = /pdf|file exists|written|created/i.test(String(step.expect || "") + " " + String(step.do || ""));
+  const expectList = !expectFile && /list|listing|names|directory/i.test(String(step.expect || ""));
+  const quietWrite = /pdf|open\(|\.pdf|>\s*\S+|tee\b/i.test(String((result && result.cmd) || ""));
+  let ok = !failed;
+  if (expectList) ok = ok && (listingNames(stdout).length > 0 || stdout.trim().length > 10);
+  else if (!expectFile && !quietWrite) ok = ok && stdout.trim().length > 0;
   const attach = big ? "summary" : step.attach || "summary";
-  const fact = attach === "none" ? "" : summarizeOutput(result.cmd, result.stdout || "");
+  const fact = attach === "none" ? "" : summarizeOutput(result.cmd, stdout);
   const goal = keepLines(context).find((l) => /GOAL:/i.test(l)) || step.do;
   return {
     ok,
-    why: ok ? "output matches expect" : empty ? "empty or failed command" : "expect not met",
+    why: ok ? "output matches expect" : failed ? "command failed" : "expect not met",
     ask: null,
     replan: !ok,
     startOver: false,
@@ -332,7 +340,7 @@ function heuristicCheck(step, result, context) {
   };
 }
 
-function stepState(plan, step, result, ok) {
+function stepState(plan, step, result, ok, prev) {
   const goal = String((plan && plan.goal) || "KEEP GOAL: (untitled)");
   const lines = [/^KEEP\s+GOAL:/i.test(goal) ? goal : "KEEP GOAL: " + goal];
   const steps = (plan && plan.steps) || [];
@@ -344,6 +352,7 @@ function stepState(plan, step, result, ok) {
   else lines.push("NEXT: none. The plan is finished.");
   const fact = summarizeOutput((result && result.cmd) || "", (result && result.stdout) || "");
   if (fact) lines.push("FACT: " + fact);
+  else String(prev || "").split("\n").filter((l) => /^FACT:/.test(l)).forEach((l) => lines.push(l));
   const done = steps.filter((s) => s.status === "ok" || (ok && s.id === step.id)).map((s) => s.do);
   if (done.length) lines.push("DONE: " + done.join("; "));
   return clipContext(lines.join("\n"));
@@ -478,8 +487,9 @@ function scoreModelReply(parsed, rawText) {
 function runUnitTests() {
   const results = [];
   const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detail || (ok ? "ok" : "fail") });
-  check("pickMode A", pickMode("ls /tmp", "").mode === "A");
+  check("pickMode A", pickMode("what is 2+2", "").mode === "A");
   check("pickMode B", pickMode("list /tmp then zip a csv", "").mode === "B");
+  check("pdf prompt is a plan", pickMode("go to /tmp and list all files create a pdf with the summary", "").mode === "B");
   check("no goal drops", finalizeRewrite("", "FACT: x", "hi") === "");
   check("heuristic rewrite skip", heuristicRewrite("", "ls /tmp", "list") === "");
   const kept = finalizeRewrite("KEEP GOAL: inspect /tmp", "FACT: aider", "add");
@@ -506,6 +516,12 @@ function runUnitTests() {
   check("angry pipeline", angry && angry.steps.length === 4 && angry.steps[2].cmd == null);
   const c = heuristicCheck(p.steps[0], { cmd: "ls", code: 1, stdout: "" }, "KEEP GOAL: x");
   check("failed check", c.ok === false && c.replan === true);
+  const quiet = heuristicCheck(
+    { id: "2", do: "Write a PDF summary of those names", expect: "pdf file exists", attach: "paths" },
+    { cmd: "python3 -c \"open('/tmp/tmp-summary.pdf','wb').write(b'')\"", code: 0, stdout: "" },
+    "KEEP GOAL: x",
+  );
+  check("quiet pdf write ok", quiet.ok === true);
   const emit = heuristicEmit(angry.steps[2], "KEEP GOAL: x\nFACT: I hate this bug. Furious.");
   check("emit csv", emit && /angry\.csv/.test(emit.cmd || ""));
   check("parseEmit", parseEmit('{"cmd":null,"ask":"where?"}').ask === "where?");

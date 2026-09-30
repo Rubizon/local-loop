@@ -5,11 +5,9 @@ const sendBtn = document.getElementById("send");
 const budgetEl = document.getElementById("budget");
 const chipModel = document.getElementById("chipModel");
 const chipCwd = document.getElementById("chipCwd");
-const modesEl = document.getElementById("modes");
 
 let busy = false;
 let hold = "";
-let forced = null;
 let context = "";
 let pendingA = null;
 let plan = null;
@@ -75,24 +73,11 @@ function addMsg(role, text) {
   return { div: div, body: body };
 }
 
-function guessMode(text) {
-  const t = (text || "").trim();
-  if (forced === "A" || forced === "B") return { mode: forced, why: "user" };
-  if (/^\s*(plan|task)\s*:/i.test(t)) return { mode: "B", why: "forced plan" };
-  if (/^\s*(ask|do|one)\s*:/i.test(t)) return { mode: "A", why: "forced direct" };
-  if (/\b(then|and then|after that|zip\b|excel|xlsx|csv\b|for all|every |step by step|pipeline|search all)\b/i.test(t)) {
-    return { mode: "B", why: "multi-step language" };
-  }
-  return { mode: "A", why: "direct default" };
-}
-
-function paintModes() {
-  const g = guessMode(input ? input.value : "");
-  const active = forced || g.mode;
-  if (!modesEl) return;
-  Array.prototype.forEach.call(modesEl.querySelectorAll("button"), function (btn) {
-    btn.classList.toggle("on", btn.getAttribute("data-mode") === active);
-  });
+function actionTitle(step) {
+  const text = String((step && step.do) || "");
+  if (/pdf/i.test(text)) return "Create PDF";
+  if (/\blist\b|\bls\b/i.test(text)) return "List files";
+  return text || "Run command";
 }
 
 function renderContext(text) {
@@ -276,22 +261,33 @@ function renderPlan(host) {
   wrap.appendChild(note);
   const step = plan.steps && plan.steps[plan.cursor];
   const finished = plan.steps && plan.steps.length && plan.steps.every(function (s) { return s.status === "ok"; });
-  const reportStep = step && !step.cmd && /report|short name|summary/i.test((step.do || "") + " " + (step.expect || ""));
-  const pdfStep = step && /pdf/i.test(step.do || "");
   const items = [];
-  if (!finished && step) {
+  if (!finished && step && step.cmd) {
+    const title = document.createElement("div");
+    title.className = "plan-h";
+    title.textContent = actionTitle(step);
+    wrap.appendChild(title);
+    const pre = document.createElement("pre");
+    pre.className = "cmd";
+    pre.textContent = step.cmd;
+    wrap.appendChild(pre);
     items.push({
-      label: pdfStep ? (step.cmd ? "Write the PDF" : "Prepare the PDF") : reportStep ? "Write the report" : step.cmd ? "Run " + step.cmd.split("\n")[0].slice(0, 42) : "Prepare this step",
+      label: "Approve",
       ok: true,
       fn: function () {
         runPlanStep(host);
       },
     });
-    setHold(pdfStep
-      ? "Waiting for you. Next writes the PDF from the names already in state."
-      : reportStep
-        ? "Waiting for you. Next writes the short report in this thread."
-        : "Waiting for you. Next: " + step.do + (step.need ? ". Then use " + step.need + "." : "."));
+    setHold("");
+  } else if (!finished && step) {
+    items.push({
+      label: "Show the command",
+      ok: true,
+      fn: function () {
+        runPlanStep(host);
+      },
+    });
+    setHold(actionTitle(step) + " needs a command. Show it, then approve it.");
   } else {
     setHold(finished ? "Done. Nothing else is waiting." : "");
   }
@@ -459,10 +455,9 @@ async function turn() {
   if (!text || busy) return;
   setHold("");
   input.value = "";
-  paintModes();
   addMsg("user", text);
   const pending = addMsg("bot", "…");
-  setBusy(true, guessMode(text).mode === "B" ? "Planning" : "Direct");
+  setBusy(true, "Thinking");
   const ac = new AbortController();
   const timer = setTimeout(function () {
     ac.abort();
@@ -471,7 +466,7 @@ async function turn() {
     const r = await fetch("/api/turn", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text: text, forced: forced }),
+      body: JSON.stringify({ text: text }),
       signal: ac.signal,
     });
     const data = await r.json().catch(function () {
@@ -511,18 +506,7 @@ if (input) {
     }
   });
   input.addEventListener("input", function () {
-    paintModes();
     updateBudget();
-  });
-}
-
-if (modesEl) {
-  modesEl.addEventListener("click", function (e) {
-    const btn = e.target.closest("button[data-mode]");
-    if (!btn) return;
-    const m = btn.getAttribute("data-mode");
-    forced = forced === m ? null : m;
-    paintModes();
   });
 }
 
@@ -575,5 +559,4 @@ if (clearBtn)
 refresh().catch(function (e) {
   addMsg("err", e.message);
 });
-paintModes();
 updateBudget();
