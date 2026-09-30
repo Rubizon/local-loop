@@ -184,6 +184,15 @@ function addBlocks(host, text) {
   flushPara();
 }
 
+function addPre(host, text) {
+  var body = String(text || "").replace(/^\n+|\n+$/g, "");
+  if (!body) return;
+  var pre = document.createElement("pre");
+  pre.className = "text";
+  pre.textContent = body;
+  host.appendChild(pre);
+}
+
 function renderMarkdown(md, host) {
   host.textContent = "";
   var src = String(md || "").replace(/\r\n/g, "\n");
@@ -194,11 +203,11 @@ function renderMarkdown(md, host) {
   let last = 0;
   let match;
   while ((match = re.exec(src))) {
-    if (match.index > last) addBlocks(host, src.slice(last, match.index));
+    if (match.index > last) addPre(host, src.slice(last, match.index));
     addCodeBox(host, match[1].trim(), match[2]);
     last = match.index + match[0].length;
   }
-  if (last < src.length) addBlocks(host, src.slice(last));
+  if (last < src.length) addPre(host, src.slice(last));
   if (!host.childNodes.length) {
     const p = document.createElement("p");
     p.textContent = src;
@@ -309,6 +318,19 @@ function showDoubt(box, warning) {
   note("unsure", (warning.sign || "") + " " + (warning.why || ""));
 }
 
+var formatReason = false;
+try { formatReason = localStorage.getItem("format-reason") === "1"; } catch (_) {}
+
+function renderReasonBody(pre, text) {
+  var raw = String(text || "");
+  if (!formatReason || !window.LoopFormat) {
+    pre.textContent = raw;
+    return;
+  }
+  var shaped = LoopFormat.formatAnswer(raw);
+  pre.textContent = shaped.replace(/^```[a-zA-Z0-9+#]*\n/, "").replace(/\n```$/, "");
+}
+
 function showReason(box, text) {
   if (!box || !text) return;
   const el = document.createElement("div");
@@ -316,14 +338,26 @@ function showReason(box, text) {
   const k = document.createElement("div");
   k.className = "reason-k";
   k.textContent = "Reasoning";
-  const p = document.createElement("div");
-  p.textContent = text;
+  const pre = document.createElement("pre");
+  pre.className = "reason-body";
+  pre.dataset.raw = text;
+  renderReasonBody(pre, text);
   el.appendChild(k);
-  el.appendChild(p);
+  el.appendChild(pre);
   const body = box.querySelector(".body");
   if (body) box.insertBefore(el, body);
   else box.appendChild(el);
   note("reason", text);
+}
+
+function setFormatReason(on) {
+  formatReason = !!on;
+  try { localStorage.setItem("format-reason", formatReason ? "1" : "0"); } catch (_) {}
+  document.querySelectorAll(".reason-body").forEach(function (pre) {
+    renderReasonBody(pre, pre.dataset.raw || "");
+  });
+  var btn = document.getElementById("reasonFmt");
+  if (btn) btn.classList.toggle("on", formatReason);
 }
 
 function actionTitle(step) {
@@ -998,6 +1032,11 @@ function downloadText(filename, text) {
 }
 
 var testBtn = document.getElementById("test");
+var reasonFmtBtn = document.getElementById("reasonFmt");
+if (reasonFmtBtn) {
+  reasonFmtBtn.classList.toggle("on", formatReason);
+  reasonFmtBtn.onclick = function () { setFormatReason(!formatReason); };
+}
 if (testBtn)
   testBtn.onclick = async function () {
     const box = addMsg("bot", "Testing the model…");

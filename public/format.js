@@ -83,6 +83,54 @@
     return s.replace(/:\s+/, ":\n  ");
   }
 
+  function alignPairs(block) {
+    var lines = String(block || "").split("\n");
+    if (lines.length < 2) return "";
+    var rows = [];
+    for (var i = 0; i < lines.length; i++) {
+      var m = lines[i].match(/^\s*([A-Za-z][^:=\n]{0,28}?)\s*([:=])\s*(\S.*)$/);
+      if (!m) return "";
+      rows.push([m[1].trim(), m[2], m[3].trim()]);
+    }
+    var w = 0;
+    rows.forEach(function (r) { if (r[0].length > w) w = r[0].length; });
+    return rows.map(function (r) {
+      return r[0] + " ".repeat(w - r[0].length) + " " + r[1] + " " + r[2];
+    }).join("\n");
+  }
+
+  function alignPipes(block) {
+    var lines = String(block || "").split("\n").filter(function (l) { return l.trim(); });
+    if (lines.length < 2 || !lines.every(function (l) { return l.indexOf("|") !== -1; })) return "";
+    var rows = lines.map(function (l) {
+      return l.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map(function (c) { return c.trim(); });
+    }).filter(function (r) { return !r.every(function (c) { return /^:?-+:?$/.test(c); }); });
+    if (rows.length < 2) return "";
+    var cols = 0;
+    rows.forEach(function (r) { if (r.length > cols) cols = r.length; });
+    if (cols < 2) return "";
+    var width = [];
+    var c;
+    for (c = 0; c < cols; c++) {
+      width[c] = 0;
+      rows.forEach(function (r) { width[c] = Math.max(width[c], (r[c] || "").length); });
+    }
+    return rows.map(function (r) {
+      var cells = [];
+      for (c = 0; c < cols; c++) {
+        var cell = r[c] || "";
+        cells.push(cell + " ".repeat(Math.max(0, width[c] - cell.length)));
+      }
+      return cells.join("  ").replace(/\s+$/, "");
+    }).join("\n");
+  }
+
+  function alignLayout(text) {
+    return String(text || "").split(/\n{2,}/).map(function (block) {
+      return alignPipes(block) || alignPairs(block) || block;
+    }).join("\n\n");
+  }
+
   function fence(kind, code) {
     var body = kind === "python" ? prettyPython(code) : prettyBraces(code);
     return "```" + kind + "\n" + body + "\n```";
@@ -98,10 +146,10 @@
       var prose = raw.slice(0, at).trim();
       var code = raw.slice(at).trim();
       var inner = codeKind(code);
-      if (inner) return prose + "\n\n" + fence(inner, code);
+      if (inner) return alignLayout(prose) + "\n\n" + fence(inner, code);
     }
-    return raw;
+    return alignLayout(raw);
   }
 
-  return { formatAnswer: formatAnswer, prettyBraces: prettyBraces };
+  return { formatAnswer: formatAnswer, prettyBraces: prettyBraces, alignLayout: alignLayout };
 });

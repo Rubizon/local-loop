@@ -60,10 +60,10 @@ const SYSTEM_NOTE = `One JSON object. The first character is {.
 Do not paste code.`;
 
 const SYSTEM_MARKUP = `Make the answer easier to read. Output markdown only. No JSON.
-Do not add facts, paths, or commands that are not already in the text.
-Use short paragraphs and bullet lists.
+The reader uses a monospace font. Align columns with spaces.
+Line up "key: value" so the values start in the same column.
 Put code in a fenced block with a language tag.
-Do not start with "Here is".`;
+Do not add facts. Do not start with "Here is".`;
 
 const SYSTEM_SCAN = `You read one source file. JSON only. The first character is {.
 {"note":"one or two sentences"}
@@ -1866,6 +1866,8 @@ function runUnitTests() {
   check("scan refuses a pathless tree", !!(scanPlan("read the entire codebase and report currencies") || {}).missing);
   check("scan files stay under the root", listScanFiles("/tmp/shop/a.js\n/etc/passwd\n/tmp/shop/lib/b.js\n", "/tmp/shop", 60).length === 2);
   check("java is a code block", /```java\npublic class HelloWorld \{\n {2}public static void main/.test(require("./public/format").formatAnswer('public class HelloWorld { public static void main(String[] args) { System.out.println("Hello, World!"); } }')));
+  check("pairs line up", require("./public/format").alignLayout("id: 1\ncurrency: EUR") === "id       : 1\ncurrency : EUR");
+  check("table columns line up", require("./public/format").alignLayout("| coin | code |\n| --- | --- |\n| euro | EUR |\n| yen | JPY |") === "coin  code\neuro  EUR\nyen   JPY");
   check("for-loop keeps its header", /for \(int i = 0; i < n; i\+\+\) \{\n {2}sum \+= i;/.test(require("./public/format").formatAnswer("for (int i = 0; i < n; i++) { sum += i; }")));
   const quietWrite = heuristicCheck(
     { id: "1", do: "write out", expect: "file exists", attach: "paths" },
