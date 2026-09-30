@@ -351,6 +351,33 @@ function heuristicPlan(text) {
   return null;
 }
 
+function localTurn(text, context) {
+  const pick = pickMode(text, context, null);
+  const direct = heuristicDirect(text);
+  if (pick.mode === "A") {
+    if (direct && direct.cmd) {
+      return { mode: "A", why: pick.why, display: direct.display, cmd: direct.cmd, plan: null, needsModel: false };
+    }
+    return { mode: "A", why: pick.why, display: "", cmd: null, plan: null, needsModel: true };
+  }
+  const plan = heuristicPlan(text);
+  if (plan && plan.steps && plan.steps.length) {
+    const cmd = plan.steps[0].cmd || null;
+    return {
+      mode: "B",
+      why: pick.why,
+      display: "Plan: " + String(plan.goal || "").replace(/^KEEP GOAL:\s*/i, ""),
+      cmd: cmd,
+      plan: plan,
+      needsModel: false,
+    };
+  }
+  if (direct && direct.cmd) {
+    return { mode: "A", why: pick.why, display: direct.display, cmd: direct.cmd, plan: null, needsModel: false };
+  }
+  return { mode: "B", why: pick.why, display: "", cmd: null, plan: null, needsModel: true };
+}
+
 function angryLines(text) {
   return String(text || "")
     .split("\n")
@@ -760,6 +787,21 @@ function runUnitTests() {
   check("pdf prompt is a plan", pickMode("go to /tmp and list all files create a pdf with the summary", "").mode === "B");
   const listTmp = heuristicPlan("go to /tmp and list all files");
   check("list /tmp has a command", listTmp && listTmp.steps.length === 1 && listTmp.steps[0].cmd === "ls -la /tmp");
+  const speed = [
+    ["go to /tmp and list all files", "ls -la /tmp"],
+    ["list all files", "ls -la"],
+    ["ls /tmp", "ls -la /tmp"],
+    ["list files in /tmp", "ls -la /tmp"],
+  ];
+  speed.forEach(function (row) {
+    const got = localTurn(row[0], "");
+    check("speedrun " + row[0], !got.needsModel && got.cmd === row[1], got.needsModel ? "asked the model" : got.cmd);
+  });
+  const foo = localTurn('create a file "foo.txt" and write there number 0 -> 100 inside.', "");
+  check("speedrun numbered file", !foo.needsModel && /range\(0,101\)/.test(foo.cmd || ""), foo.needsModel ? "asked the model" : foo.cmd);
+  const pdf = localTurn("go to /tmp and list all files create a pdf with the summary", "");
+  check("speedrun pdf stays two steps", pdf.plan && pdf.plan.steps.length === 2 && pdf.plan.steps[0].cmd === "ls -la /tmp");
+  check("speedrun chat asks the model", localTurn("what is 2+2", "").needsModel === true);
   const numbers = heuristicPlan('create a file "foo.txt" and write there number 0 -> 100 inside.');
   check(
     "numbers file command",
@@ -881,6 +923,7 @@ module.exports = {
   applyAttach,
   heuristicDirect,
   heuristicPlan,
+  localTurn,
   heuristicEmit,
   heuristicCheck,
   judge,

@@ -215,41 +215,41 @@ app.post("/api/turn", async (req, res) => {
     const text = String((req.body && req.body.text) || "").trim();
     if (!text) return res.status(400).json({ error: "empty text" });
     const context = loadContext();
-    const forced = req.body.forced === "A" || req.body.forced === "B" ? req.body.forced : null;
-    const pick = lib.pickMode(text, context, forced);
-    if (pick.mode === "A") {
-      const simple = lib.heuristicDirect(text);
-      const parsed = simple || lib.parseDirect(await ollamaText(
+    const decided = lib.localTurn(text, context);
+    if (!decided.needsModel) {
+      if (decided.plan) {
+        ledger = [];
+        lastGoodStep = null;
+      }
+      return res.json({
+        mode: decided.mode,
+        why: decided.why,
+        display: decided.display,
+        cmd: decided.cmd,
+        plan: decided.plan,
+        context,
+      });
+    }
+    if (decided.mode === "A") {
+      const parsed = lib.parseDirect(await ollamaText(
         lib.SYSTEM_A,
         "State:\n" + (context || "(empty)") + "\n\nUser:\n" + lib.clip(text, 2000),
         400
       ));
-      return res.json({ mode: "A", why: pick.why, display: parsed.display, cmd: parsed.cmd, context });
+      return res.json({ mode: "A", why: decided.why, display: parsed.display, cmd: parsed.cmd, context });
     }
-    const simple = lib.heuristicPlan(text);
-    let plan;
-    let display;
-    if (simple) {
-      plan = simple;
-      display = "Plan: " + simple.goal.replace(/^KEEP GOAL:\s*/i, "");
-    } else {
-      const raw = await ollamaText(
-        lib.SYSTEM_PLAN,
-        "State:\n" + (context || "(empty)") + "\n\nUser:\n" + lib.clip(text, 2000),
-        500
-      );
-      plan = lib.parsePlan(raw, text);
-      display = lib.cleanDisplay(lib.extractJson(raw).display, "");
-      if (!plan.steps.length) plan = null;
-    }
+    const raw = await ollamaText(
+      lib.SYSTEM_PLAN,
+      "State:\n" + (context || "(empty)") + "\n\nUser:\n" + lib.clip(text, 2000),
+      500
+    );
+    let plan = lib.parsePlan(raw, text);
+    let display = lib.cleanDisplay(lib.extractJson(raw).display, "");
+    if (!plan.steps.length) plan = null;
     if (!plan) {
-      const direct = lib.heuristicDirect(text);
-      if (direct && direct.cmd) {
-        return res.json({ mode: "A", why: pick.why, display: direct.display, cmd: direct.cmd, context });
-      }
       return res.json({
         mode: "A",
-        why: pick.why,
+        why: decided.why,
         display: "I could not make a command for that.",
         cmd: null,
         context,
@@ -258,7 +258,7 @@ app.post("/api/turn", async (req, res) => {
     if (!display) display = "Plan: " + plan.goal.replace(/^KEEP GOAL:\s*/i, "");
     ledger = [];
     lastGoodStep = null;
-    res.json({ mode: "B", why: pick.why, display, plan, context });
+    res.json({ mode: "B", why: decided.why, display, plan, context });
   } catch (err) {
     res.status(500).json({ error: String(err.message || err) });
   }
