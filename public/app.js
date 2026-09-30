@@ -511,29 +511,66 @@ if (input) {
   });
 }
 
+function downloadText(filename, text) {
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([text], { type: "text/plain;charset=utf-8" }));
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+}
+
 var testBtn = document.getElementById("test");
 if (testBtn)
   testBtn.onclick = async function () {
     const box = addMsg("bot", "Testing the model…");
     busy = true;
     if (sendBtn) sendBtn.disabled = true;
+    testBtn.disabled = true;
     clearSpinners();
+    const probes = [];
     try {
-      const r = await fetch("/api/model-test", { method: "POST" });
-      const data = await r.json();
-      if (!r.ok && !data.checks) throw new Error(data.error || "model test failed");
-      const lines = ["Model " + (data.model || "")];
-      (data.checks || []).forEach(function (c) {
-        lines.push((c.ok ? "ok" : "not ok") + "  " + c.name + " — " + (c.detail || ""));
+      const listed = await fetch("/api/model-test").then(function (r) { return r.json(); });
+      const kinds = listed.kinds || [];
+      for (var i = 0; i < kinds.length; i++) {
+        box.body.textContent = "Testing the model  " + (i + 1) + "/" + kinds.length + "  " + kinds[i] + "…";
+        const r = await fetch("/api/model-test", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ kind: kinds[i] }),
+        });
+        const data = await r.json();
+        if (!r.ok) throw new Error(data.error || "model test failed");
+        if (data.checks && data.checks[0]) probes.push(data.checks[0]);
+      }
+      const saved = await fetch("/api/model-report", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ probes: probes }),
+      }).then(function (r) { return r.json(); });
+      if (!saved.report) throw new Error(saved.error || "no report");
+      const lines = ["Model " + (listed.model || "")];
+      if (saved.unit) lines.push("Unit " + saved.unit.passed + "/" + saved.unit.total);
+      probes.forEach(function (c) {
+        lines.push((c.ok ? "ok" : "not ok") + "  " + (c.name || c.kind) + " — " + (c.detail || ""));
       });
-      if (data.error && !(data.checks || []).length) lines.push(data.error);
-      lines.push(data.ok ? "Sane enough for the workflow." : "Not sane enough for the workflow.");
+      const sane = probes.length && probes.every(function (c) { return c.ok; }) && saved.unit && saved.unit.ok;
+      lines.push(sane ? "Sane enough for the workflow." : "Not sane enough for the workflow.");
+      lines.push("Report: " + (saved.file || "model-report.txt"));
       box.body.textContent = lines.join("\n");
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "ghost";
+      btn.textContent = "Download report";
+      btn.onclick = function () { downloadText("model-report.txt", saved.report); };
+      box.div.appendChild(btn);
+      downloadText("model-report.txt", saved.report);
     } catch (e) {
       box.body.textContent = e.message;
     } finally {
       busy = false;
       if (sendBtn) sendBtn.disabled = false;
+      testBtn.disabled = false;
       clearSpinners();
     }
   };

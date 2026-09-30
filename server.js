@@ -125,20 +125,59 @@ app.get("/api/state", (_req, res) => {
   });
 });
 app.get("/api/selftest", (_req, res) => res.json(lib.runUnitTests()));
-app.post("/api/model-test", async (_req, res) => {
+app.get("/api/model-test", (_req, res) => {
+  res.json({ model: OLLAMA_MODEL, kinds: lib.WORKFLOW_PROBES.map((p) => p.kind) });
+});
+
+app.post("/api/model-test", async (req, res) => {
+  const kind = String((req.body && req.body.kind) || "");
+  const probes = kind ? lib.WORKFLOW_PROBES.filter((p) => p.kind === kind) : lib.WORKFLOW_PROBES;
+  if (!probes.length) return res.status(400).json({ error: "unknown probe" });
   const checks = [];
   try {
-    for (const probe of lib.WORKFLOW_PROBES) {
+    for (const probe of probes) {
       try {
         const raw = await ollamaText(probe.system, probe.user, probe.predict);
-        checks.push(lib.scoreWorkflow(probe.kind, raw));
+        checks.push({
+          ...lib.scoreWorkflow(probe.kind, raw),
+          kind: probe.kind,
+          raw,
+          system: probe.system,
+          user: probe.user,
+        });
       } catch (err) {
-        checks.push({ name: probe.kind, ok: false, detail: String(err.message || err) });
+        checks.push({
+          name: probe.kind,
+          kind: probe.kind,
+          ok: false,
+          detail: String(err.message || err),
+          raw: "",
+          system: probe.system,
+          user: probe.user,
+        });
       }
     }
     res.json({ model: OLLAMA_MODEL, ok: checks.every((c) => c.ok), checks });
   } catch (err) {
     res.status(500).json({ ok: false, error: String(err.message || err), model: OLLAMA_MODEL, checks });
+  }
+});
+
+app.post("/api/model-report", (req, res) => {
+  try {
+    const unit = lib.runUnitTests();
+    const report = lib.formatReport({
+      model: OLLAMA_MODEL,
+      cwd: sessionCwd,
+      time: new Date().toISOString(),
+      unit,
+      probes: (req.body && req.body.probes) || [],
+    });
+    const file = path.join(sessionCwd, "model-report.txt");
+    fs.writeFileSync(file, report, "utf8");
+    res.json({ report, file, unit: { passed: unit.passed, total: unit.total, ok: unit.ok } });
+  } catch (err) {
+    res.status(500).json({ error: String(err.message || err) });
   }
 });
 

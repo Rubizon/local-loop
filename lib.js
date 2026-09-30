@@ -579,6 +579,37 @@ function scoreModelReply(parsed, rawText) {
   return { ok: checks.every((c) => c.ok), passed: checks.filter((c) => c.ok).length, total: checks.length, checks, display: parsed && parsed.display };
 }
 
+function formatReport(info) {
+  const unit = (info && info.unit) || { passed: 0, total: 0, results: [] };
+  const lines = [
+    "local-loop report",
+    "model: " + ((info && info.model) || ""),
+    "cwd: " + ((info && info.cwd) || ""),
+    "time: " + ((info && info.time) || ""),
+    "",
+    "== unit ==",
+    unit.passed + "/" + unit.total,
+  ];
+  const failed = (unit.results || []).filter((r) => !r.ok);
+  if (!failed.length) lines.push("all unit checks passed");
+  failed.forEach((r) => lines.push("FAIL " + r.name + " — " + (r.detail || "fail")));
+  (info && info.probes ? info.probes : []).forEach((p) => {
+    lines.push("");
+    lines.push("== " + (p.kind || p.name || "probe") + " ==");
+    lines.push("ok: " + !!p.ok);
+    lines.push("detail: " + (p.detail || ""));
+    lines.push("--- system ---");
+    lines.push(String(p.system || ""));
+    lines.push("--- user ---");
+    lines.push(String(p.user || ""));
+    lines.push("--- raw ---");
+    lines.push(clip(String(p.raw || ""), 8000));
+  });
+  lines.push("");
+  lines.push("== end ==");
+  return lines.join("\n");
+}
+
 function scoreWorkflow(kind, raw) {
   const parsed = extractJson(raw);
   if (parsed._raw) return { name: kind, ok: false, detail: "no JSON" };
@@ -633,6 +664,14 @@ function runUnitTests() {
     numbers && numbers.steps.length === 1 && /foo\.txt/.test(numbers.steps[0].cmd) && /range\(0,101\)/.test(numbers.steps[0].cmd) && !/\n/.test(numbers.steps[0].cmd)
   );
   check("cmd null is not a reply", cleanDisplay("cmd null", "Plan ready.") === "Plan ready.");
+  const report = formatReport({
+    model: "qwen",
+    cwd: "/tmp/loop-test",
+    time: "t",
+    unit: { passed: 1, total: 2, results: [{ name: "sample", ok: false, detail: "no" }] },
+    probes: [{ kind: "direct", ok: false, detail: "no JSON", system: "SYS", user: "USER", raw: "hello" }],
+  });
+  check("report export", /FAIL sample/.test(report) && /== direct ==/.test(report) && /--- raw ---\nhello/.test(report));
   check("empty model plan", parsePlan("cmd null", "create a file").steps.length === 0);
   check("no goal drops", finalizeRewrite("", "FACT: x", "hi") === "");
   check("heuristic rewrite skip", heuristicRewrite("", "ls /tmp", "list") === "");
@@ -743,6 +782,7 @@ module.exports = {
   rollbackAfter,
   estimatePrompt,
   scoreModelReply,
+  formatReport,
   scoreWorkflow,
   WORKFLOW_PROBES,
   runUnitTests,

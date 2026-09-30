@@ -42,7 +42,7 @@ button.ghost, button.send {
   padding: 6px 12px;
   cursor: pointer;
 }
-button.ghost:hover { background: #2a2a2a; }
+.msg button.ghost { display: inline-block; margin-top: 10px; }
 main {
   flex: 1;
   min-height: 0;
