@@ -23,6 +23,7 @@ let sessionCwd = freshCwd();
 const CWD_ALLOW = [WORKSPACE, "/tmp", os.homedir()].map((p) => path.resolve(p));
 let ledger = [];
 let lastGoodStep = null;
+let lastRun = null;
 
 const app = express();
 app.use(express.json({ limit: "2mb" }));
@@ -76,12 +77,14 @@ function runCommand(cmd, cwd, stepId) {
   }
   return new Promise((resolve) => {
     exec(safe, { cwd: dest, timeout: 20000, maxBuffer: 500000, env: process.env }, (err, stdout, stderr) => {
+      let errText = String(stderr || "");
+      if (err && err.killed) errText = (errText ? errText + "\n" : "") + "Stopped after 20s.";
       const result = {
         cmd: safe,
         cwd: dest,
         code: err && Number.isFinite(err.code) ? err.code : err ? 1 : 0,
         stdout: String(stdout || "").slice(0, 400000),
-        stderr: String(stderr || "").slice(0, 80000),
+        stderr: errText.slice(0, 80000),
       };
       if (stepId && /^zip\b/.test(safe) && result.code === 0) {
         const out = (safe.match(/(\S+\.zip)/) || [])[1];
@@ -378,7 +381,16 @@ app.post("/api/apply", async (req, res) => {
     }
     const extra = req.body && req.body.cwd ? resolveCwd(req.body.cwd) : sessionCwd;
     const result = await runCommand(cmd, extra, stepId);
-    res.json({ result, cwd: sessionCwd, warn: (result.stdout || "").length > 2500 });
+    lastRun = result;
+    res.json({
+      result: {
+        ...result,
+        stdout: lib.previewOutput(result.stdout, 8000),
+        stderr: lib.previewOutput(result.stderr, 2000),
+      },
+      cwd: sessionCwd,
+      warn: (result.stdout || "").length > 2500,
+    });
   } catch (err) {
     res.status(400).json({ error: String(err.message || err) });
   }
@@ -457,7 +469,8 @@ app.post("/api/replan", async (req, res) => {
 app.post("/api/check", async (req, res) => {
   try {
     const plan = req.body.plan;
-    const result = req.body.result;
+    const posted = req.body.result || {};
+    const result = lastRun && lastRun.cmd === posted.cmd ? { ...posted, stdout: lastRun.stdout, stderr: lastRun.stderr, code: lastRun.code } : posted;
     const step = lib.currentStep(plan);
     if (!step) return res.status(400).json({ error: "no current step" });
     const context = loadContext();
@@ -530,6 +543,7 @@ app.post("/api/context/clear", (_req, res) => {
   saveContext("");
   ledger = [];
   lastGoodStep = null;
+  lastRun = null;
   sessionCwd = freshCwd();
   res.json({ context: "", cwd: sessionCwd });
 });

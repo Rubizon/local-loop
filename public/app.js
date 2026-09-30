@@ -287,8 +287,7 @@ function renderPlan(host) {
     k.className = "plan-k";
     k.textContent = (s.status || "todo").toUpperCase();
     line.appendChild(k);
-    const keep = s.attach === "none" ? "output is not stored" : "then the model reads the output and updates state";
-    line.appendChild(document.createTextNode(s.do + " · " + keep));
+    line.appendChild(document.createTextNode(s.do || "Step"));
     wrap.appendChild(line);
   });
   if (check) {
@@ -410,12 +409,17 @@ async function applyOne(cmd, stepId, host, after) {
 }
 
 async function checkpoint(result, host) {
-  setBusy(true, "Checkpoint");
+  setBusy(true, "Working through the output");
+  const ac = new AbortController();
+  const timer = setTimeout(function () {
+    ac.abort();
+  }, 240000);
   try {
     const r = await fetch("/api/check", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ plan: plan, result: result }),
+      signal: ac.signal,
     });
     const d = await r.json();
     if (!r.ok) throw new Error(d.error || "check failed");
@@ -435,7 +439,10 @@ async function checkpoint(result, host) {
       return;
     }
     renderPlan(host);
+  } catch (e) {
+    addMsg("err", e.name === "AbortError" ? "Stopped. The output summary took longer than 4 minutes." : e.message);
   } finally {
+    clearTimeout(timer);
     setBusy(false);
   }
 }

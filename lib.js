@@ -43,7 +43,7 @@ Keep finished work. 1-5 remaining steps. Do not repeat done steps.`;
 const SYSTEM_THINK = `Think, then one JSON object. The first character is {.
 {"reason":"what you need, and why","display":"one sentence","cmd":"one shell command or null"}
 If you have not seen the thing the user asked about, do not describe it. Put the read in cmd.
-Example: {"reason":"The file has not been read, so I cannot report it yet.","display":"I'll read it first.","cmd":"cat /tmp/notes.txt"}
+Example: {"reason":"I have not read the file the user named, so I cannot summarize it yet.","display":"I'll read the whole file.","cmd":"cat /tmp/lib.js"}
 Question example: {"reason":"No file or command is needed.","display":"4","cmd":null}`;
 
 const SYSTEM_SAY = `Report the command output. JSON only. The first character is {.
@@ -92,6 +92,13 @@ function readPathFromCmd(cmd) {
 
 function contextCharBudget() {
   return Math.max(2000, ((Number(NUM_CTX) || 8192) - 1000) * 3);
+}
+
+function previewOutput(text, n) {
+  const s = String(text || "");
+  const limit = n || 8000;
+  if (s.length <= limit) return s;
+  return s.slice(0, limit) + "\n… " + (s.length - limit) + " more characters";
 }
 
 function clip(s, n) {
@@ -1157,6 +1164,7 @@ function runUnitTests() {
   const big = "START\n" + "x".repeat(contextCharBudget() + 40) + "\nEND";
   const pieces = chunkText(big, contextCharBudget());
   check("oversized output splits", pieces.length > 1 && pieces[0].includes("START") && pieces[pieces.length - 1].includes("END"));
+  check("preview keeps the tail count", /more characters$/.test(previewOutput("abcdef", 3)) && previewOutput("abcdef", 3).startsWith("abc"));
   check("ok string is success", parseCheck('{"ok":"ok","why":"ok"}', "").ok === true);
   const emitted = heuristicEmit(pdfPlan.steps[1], stated);
   check("emit pdf", emitted && /tmp-summary\.pdf/.test(emitted.cmd || "") && pdfBytes("names").slice(0, 5).toString() === "%PDF-");
@@ -1248,6 +1256,7 @@ module.exports = {
   SYSTEM_NOTE,
   MODEL_PROBE_USER,
   contextCharBudget,
+  previewOutput,
   clip,
   chunkText,
   readPathFromCmd,
