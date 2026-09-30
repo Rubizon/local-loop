@@ -531,7 +531,12 @@ var clearBtn = document.getElementById("clear");
 if (clearBtn)
   clearBtn.onclick = async function () {
     try {
-      await fetch("/api/context/clear", { method: "POST" });
+      const r = await fetch("/api/context/clear", { method: "POST" });
+      const d = await r.json().catch(function () { return {}; });
+      if (d.cwd) {
+        setText(chipCwd, "cwd " + d.cwd);
+        if (chipCwd) chipCwd.title = d.cwd;
+      }
     } catch (_) {}
     pendingA = null;
     plan = null;

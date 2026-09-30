@@ -1,6 +1,7 @@
 const fs = require("fs");
 const path = require("path");
 const os = require("os");
+const crypto = require("crypto");
 const { exec } = require("child_process");
 const express = require("express");
 const lib = require("./lib");
@@ -12,7 +13,13 @@ const WORKSPACE = path.resolve(process.env.WORKSPACE || process.cwd());
 const CONTEXT_FILE = path.resolve(process.env.CONTEXT_FILE || path.join(__dirname, "data", "context.txt"));
 const NUM_CTX = lib.NUM_CTX;
 
-let sessionCwd = WORKSPACE;
+function freshCwd() {
+  const dir = path.join("/tmp", "loop-" + Date.now().toString(36) + "-" + crypto.randomBytes(3).toString("hex"));
+  fs.mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
+let sessionCwd = freshCwd();
 const CWD_ALLOW = [WORKSPACE, "/tmp", os.homedir()].map((p) => path.resolve(p));
 let ledger = [];
 let lastGoodStep = null;
@@ -347,7 +354,7 @@ app.post("/api/context/clear", (_req, res) => {
   saveContext("");
   ledger = [];
   lastGoodStep = null;
-  sessionCwd = WORKSPACE;
+  sessionCwd = freshCwd();
   res.json({ context: "", cwd: sessionCwd });
 });
 
@@ -355,7 +362,7 @@ if (require.main === module) {
   app.listen(PORT, "127.0.0.1", () => {
     console.log(`local-loop http://127.0.0.1:${PORT}`);
     console.log(`model ${OLLAMA_MODEL}`);
-    console.log(`workspace ${WORKSPACE}`);
+    console.log(`cwd ${sessionCwd}`);
   });
 }
 
