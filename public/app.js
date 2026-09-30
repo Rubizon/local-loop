@@ -159,6 +159,44 @@ function addInline(parent, text) {
   if (last < text.length) parent.appendChild(document.createTextNode(text.slice(last)));
 }
 
+function copyBtn(getText) {
+  const copy = document.createElement("button");
+  copy.type = "button";
+  copy.className = "tiny ghost";
+  copy.textContent = "Copy";
+  copy.onclick = function (ev) {
+    if (ev) ev.stopPropagation();
+    const value = String(typeof getText === "function" ? getText() : getText || "");
+    const done = function () {
+      copy.textContent = "Copied";
+      setTimeout(function () { copy.textContent = "Copy"; }, 1200);
+    };
+    const fallback = function () {
+      const area = document.createElement("textarea");
+      area.value = value;
+      document.body.appendChild(area);
+      area.select();
+      try { document.execCommand("copy"); done(); }
+      catch (_) { copy.textContent = "Copy failed"; }
+      area.remove();
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(value).then(done).catch(fallback);
+    } else fallback();
+  };
+  return copy;
+}
+
+function visibleAnswer(div) {
+  if (!div) return "";
+  const native = div.querySelector(".native");
+  const read = div.querySelector(".read");
+  if (read && !read.hidden) return read.innerText || read.textContent || "";
+  if (native && !native.hidden) return native.textContent || "";
+  const body = div.querySelector(".body");
+  return body ? (body.innerText || body.textContent || "") : "";
+}
+
 function addCodeBox(host, lang, code) {
   const box = document.createElement("div");
   box.className = "codebox";
@@ -332,6 +370,7 @@ function dress(box, raw) {
   const read = document.createElement("div");
   read.className = "read";
   read.hidden = true;
+  let showRaw = true;
   bar.appendChild(status);
   bar.appendChild(toggle);
   body.appendChild(bar);
@@ -339,11 +378,10 @@ function dress(box, raw) {
   body.appendChild(read);
   const small = window.LoopFormat && LoopFormat.canFormat && LoopFormat.canFormat(text);
   if (!small) {
-    bar.hidden = true;
+    toggle.hidden = true;
     note("format", "left raw (" + text.length + " chars)");
     return;
   }
-  let showRaw = true;
   function paint() {
     read.hidden = showRaw;
     native.hidden = !showRaw;
@@ -398,7 +436,11 @@ function addMsg(role, text, quiet) {
   const body = document.createElement("div");
   body.className = "body";
   body.textContent = text;
+  const row = document.createElement("div");
+  row.className = "viewbar";
+  row.appendChild(copyBtn(function () { return visibleAnswer(div) || text; }));
   div.appendChild(who);
+  div.appendChild(row);
   div.appendChild(body);
   const event = !quiet && text ? note(role === "user" ? "you" : role === "err" ? "error" : "loop", text) : null;
   if (chat) {
@@ -470,6 +512,7 @@ function showReason(box, text) {
     panel.hidden = !open;
     el.classList.toggle("open", open);
   };
+  bar.appendChild(copyBtn(function () { return pre.textContent || raw || ""; }));
   bar.appendChild(fmt);
   panel.appendChild(bar);
   panel.appendChild(pre);
@@ -796,16 +839,25 @@ async function applyOne(cmd, stepId, host, after) {
     const term = document.createElement("div");
     term.className = "term";
     const text = (data.result.stdout || "") + (data.result.stderr ? "\n" + data.result.stderr : "");
-    term.textContent = "$ " + data.result.cmd + "  exit " + data.result.code + (data.result.code === 124 ? "  (stopped: no output or too long)" : "");
+    const full = "$ " + data.result.cmd + "  exit " + data.result.code + (data.result.code === 124 ? "  (stopped: no output or too long)" : "") + (text.trim() ? "\n" + text : "");
+    const bar = document.createElement("div");
+    bar.className = "viewbar";
+    bar.appendChild(copyBtn(full));
+    const pre = document.createElement("pre");
+    pre.className = "native";
+    pre.textContent = "$ " + data.result.cmd + "  exit " + data.result.code + (data.result.code === 124 ? "  (stopped: no output or too long)" : "");
+    term.appendChild(bar);
+    term.appendChild(pre);
     if (text.trim()) {
       const more = document.createElement("button");
       more.type = "button";
+      more.className = "tiny ghost";
       more.textContent = "Show the raw output";
       more.onclick = function () {
-        term.textContent = "$ " + data.result.cmd + "  exit " + data.result.code + "\n" + text;
+        pre.textContent = full;
         more.remove();
       };
-      term.appendChild(more);
+      bar.appendChild(more);
     }
     host.appendChild(term);
     note("command", "$ " + data.result.cmd + "  exit " + data.result.code + "\n" + text);
@@ -1228,6 +1280,17 @@ if (testBtn)
     }
     });
   };
+
+var copyDraft = document.getElementById("copyDraft");
+if (copyDraft) {
+  copyDraft.className = "tiny ghost";
+  copyDraft.replaceWith(copyBtn(function () { return input ? input.value : ""; }));
+}
+var copyState = document.getElementById("copyState");
+if (copyState) {
+  const live = copyBtn(function () { return ctxEl ? ctxEl.textContent : ""; });
+  copyState.replaceWith(live);
+}
 
 var exportBtn = document.getElementById("export");
 if (exportBtn)

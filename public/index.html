@@ -24,6 +24,7 @@
           <div class="files" id="files"></div>
           <textarea id="input" rows="1" placeholder="Message, or drop a file"></textarea>
           <div class="composer-bar">
+            <button type="button" id="copyDraft" class="tiny ghost">Copy</button>
             <span id="budget" class="meter">~0</span>
             <button class="send" type="button" id="send" aria-label="Send">↑</button>
           </div>
@@ -31,7 +32,10 @@
       </footer>
     </section>
     <aside>
-      <h2>State</h2>
+      <div class="aside-h">
+        <h2>State</h2>
+        <button type="button" id="copyState" class="tiny ghost">Copy</button>
+      </div>
       <p class="hint">The only memory. The model sees this text, not the chat. About 12 lines.</p>
       <pre id="ctx">(empty)</pre>
     </aside>

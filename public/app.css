@@ -320,7 +320,8 @@ aside {
   padding: 16px;
   min-width: 0;
 }
-aside h2 { margin: 0 0 6px; font-size: 14px; font-weight: 600; }
+aside h2 { margin: 0; font-size: 14px; font-weight: 600; }
+.aside-h { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
 #ctx {
   margin: 12px 0;
   padding: 12px;
