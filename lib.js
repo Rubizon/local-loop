@@ -9,9 +9,9 @@ const DENY_CMD = /(\bsudo\b|\brm\s+-rf\s+\/|\bmkfs\b|\bdd\s+if=|\bchmod\s+-R\s+7
 
 const SYSTEM_A = `Output one JSON object and nothing else. The first character is {.
 {"display":"short answer","cmd":null}
-cmd is one shell command, or null when no command is needed.
+You are on the user's computer. cmd is one shell command they can approve, or null when no command is needed.
 Example: {"display":"Hello.","cmd":null}
-Do not invent files.`;
+Do not invent files or refuse a path you have not opened.`;
 
 const SYSTEM_REWRITE = `Rewrite the whole working context. JSON only:
 {"context":"multiline text"}
@@ -42,15 +42,13 @@ const SYSTEM_REPLAN = `Revise remaining steps after a failed checkpoint. JSON on
 {"display":"one paragraph","steps":[{"id":"1","do":"action","need":"input","expect":"one line","attach":"none|paths|summary|full","cmd":"one command or null"}]}
 Keep finished work. 1-5 remaining steps. Do not repeat done steps.`;
 
-const SYSTEM_THINK = `Think, then one JSON object. The first character is {.
-{"reason":"your own words","display":"what the user should read","cmd":null}
-cmd is one shell command, or null when the answer is already in display.
-The command must be for what the user just asked. Never name a file they did not name.
-A question with no file and no machine fact has cmd null.
-If they asked for text or a program, put that text in display. Use \\n between lines. cmd stays null.
-If they asked about this machine and named no file, use a real command that reports the machine. Do not invent a path.
-If cmd is set, display is one sentence about what you will run. Do not invent the output.
-If they named a file to read, report, or summarize, you have not seen it yet. cmd is sed -n '1,160p' plus that path, copied exactly. display is one sentence. Do not say the file is unavailable, missing, or inaccessible.`;
+const SYSTEM_THINK = `You are on the user's computer. They want something done there. One JSON object. The first character is {.
+{"reason":"why","display":"what they read","cmd":null}
+cmd is one shell command they can approve, or null when display already holds the whole answer.
+You see a file, a directory, or command output only after a command returns it. Do not pretend you already looked. Do not refuse because you have not looked.
+Use only paths and facts the user gave you. Do not invent either.
+If cmd is set, display is one sentence about that command, not its result.
+A program or explanation they asked to see goes in display. Use \\n between lines. cmd stays null.`;
 
 const SYSTEM_SAY = `Report the command output. JSON only. The first character is {.
 {"say":"plain sentences about what the output shows"}
@@ -1844,7 +1842,7 @@ function runUnitTests() {
   check("program stays in the answer", shown && !shown.cmd && !shown.plan && /puts/.test(shown.display) && shown.display.includes("\n"));
   const lifted = parseThink('{"reason":"search","display":"grep \\"error\\" /tmp/app.log\\nor\\nrg error /tmp/app.log","cmd":null}', "find error");
   check("command in the answer is runnable", lifted.cmd && /^grep /.test(lifted.cmd) && /app\.log/.test(lifted.cmd));
-  check("prompt has no sample file", !/lib\.js/.test(SYSTEM_THINK) && !/I'll read the whole file/.test(SYSTEM_THINK) && /unavailable/.test(SYSTEM_THINK) && /sed -n '1,160p'/.test(SYSTEM_THINK));
+  check("prompt has no sample file", !/lib\.js/.test(SYSTEM_THINK) && !/sed -n/.test(SYSTEM_THINK) && /user's computer/.test(SYSTEM_THINK) && /Do not refuse/.test(SYSTEM_THINK));
   check("copied sample is rejected", copiedFromPrompt("display information about this os", { reason: "I have not read the file the user named, so I cannot summarize it yet.", display: "I'll read the whole file.", cmd: "cat /tmp/lib.js" }));
   check("intro is not the answer", thinAnswer({ display: "Here is a simple C program that prints 'hello world':", cmd: null, plan: null }));
   check("markup keeps the words", presentMarkup("prints hello", "```md\n- prints hello\n```") === "- prints hello");
