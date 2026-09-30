@@ -887,12 +887,16 @@ async function applyOne(cmd, stepId, host, after) {
 async function checkpoint(result, host) {
   setBusy(true, "Working through the output");
   const ac = new AbortController();
-  const timer = setTimeout(function () {
-    ac.abort();
-  }, 240000);
+  let timer = null;
+  function armIdle() {
+    clearTimeout(timer);
+    timer = setTimeout(function () { ac.abort(); }, 240000);
+  }
+  armIdle();
   let watch = true;
   let dressed = false;
   let live = null;
+  let seen = null;
   function paintLive(text) {
     if (dressed) return;
     const lines = String(text || "").split("\n");
@@ -913,9 +917,14 @@ async function checkpoint(result, host) {
       .then(function (s) {
         if (!watch || !s) return;
         noteUid(s.uid);
-        renderContext(s.context || "");
-        paintLive(s.context || "");
-        const next = String(s.context || "").split("\n").find(function (l) { return /^NEXT:/.test(l); });
+        const ctx = String(s.context || "");
+        if (ctx !== seen) {
+          seen = ctx;
+          armIdle();
+        }
+        renderContext(ctx);
+        paintLive(ctx);
+        const next = ctx.split("\n").find(function (l) { return /^NEXT:/.test(l); });
         if (next) setBusy(true, next.replace(/^NEXT:\s*/, ""));
       })
       .catch(function () {});
@@ -953,7 +962,7 @@ async function checkpoint(result, host) {
     const nxt = plan && plan.steps && plan.steps[plan.cursor];
     if (nxt && !nxt.cmd && !nxt.scan && nxt.status !== "ok") await runPlanStep(host);
   } catch (e) {
-    addMsg("err", e.name === "AbortError" ? "Stopped. The output summary took longer than 4 minutes." : e.message);
+    addMsg("err", e.name === "AbortError" ? "Stopped. The summary made no progress for 4 minutes." : e.message);
     renderPlan(host);
   } finally {
     clearTimeout(timer);
