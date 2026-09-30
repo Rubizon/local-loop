@@ -624,6 +624,9 @@ function presentMarkup(raw, modelText) {
     else return source;
   }
   if (!s || /Markdown only|Do not add or drop words|Make the answer easier to read|Do not add facts/.test(s)) return source;
+  const have = new Set((source.toLowerCase().match(/[a-z0-9][a-z0-9._-]*/g) || []));
+  const extra = (s.toLowerCase().match(/[a-z0-9][a-z0-9._-]*/g) || []).filter((w) => !have.has(w));
+  if (extra.length || s.length > source.length + 80) return source;
   return s;
 }
 
@@ -1847,6 +1850,8 @@ function runUnitTests() {
   check("copied sample is rejected", copiedFromPrompt("display information about this os", { reason: "I have not read the file the user named, so I cannot summarize it yet.", display: "I'll read the whole file.", cmd: "cat /tmp/lib.js" }));
   check("intro is not the answer", thinAnswer({ display: "Here is a simple C program that prints 'hello world':", cmd: null, plan: null }));
   check("markup keeps the words", presentMarkup("prints hello", "```md\n- prints hello\n```") === "- prints hello");
+  check("markup cannot invent a listing", presentMarkup("Plan: List /tmp", "- /tmp/\n- /tmp/.X11-unix\n- /tmp/.X11-unix/X0") === "Plan: List /tmp");
+  check("a plan line is not sent for markup", needsMarkup("Plan: List /tmp") === false);
   check("markup ignores a lecture", presentMarkup("prints hello", "Markdown only. Do not add or drop words.") === "prints hello");
   check("listing is not sent for markup", needsMarkup("Here is /tmp.\n\nDirectories\n" + "a\n".repeat(20)) === false);
   check("a directory list stays text", require("./public/format").isListing("Here is /tmp.\n\nDirectories\n" + ".font-unix\n".repeat(10) + "\nFiles\na.txt\n") === true);

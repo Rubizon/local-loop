@@ -164,6 +164,7 @@
   function canFormat(text) {
     var s = String(text || "").trim();
     if (!s || s.length > 500) return false;
+    if (/^plan\b/i.test(s)) return false;
     var n = 0;
     var lines = s.split("\n");
     for (var i = 0; i < lines.length; i++) if (lines[i].trim()) n++;
