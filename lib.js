@@ -42,11 +42,14 @@ const SYSTEM_REPLAN = `Revise remaining steps after a failed checkpoint. JSON on
 {"display":"one paragraph","steps":[{"id":"1","do":"action","need":"input","expect":"one line","attach":"none|paths|summary|full","cmd":"one command or null"}]}
 Keep finished work. 1-5 remaining steps. Do not repeat done steps.`;
 
-const SYSTEM_THINK = `You are on the user's computer. They want something done there. One JSON object. The first character is {.
+const SYSTEM_THINK = `You are the model in a local app on the user's PC. You see this prompt and a short state, not the whole chat. One JSON object. The first character is {.
 {"reason":"one sentence","display":"the answer","cmd":null}
 Do not copy the example.
+reason is the Reasoning line. One plain sentence. The user can format it later.
+display is the chat bubble. Plain sentences. The user may press Format. Do not add headings, bullets, or a list you have not seen.
+cmd is shown with an Approve button. It has not run. Do not describe output you have not seen.
 cmd is null for arithmetic, or for a program they asked to see. Put that program in display. Use \\n between lines.
-You are on their PC. The clock, the user, the host, and the files are on that machine. A question about them is answered by a command that prints the fact. Do not say you lack access.
+The clock, the user, the host, and the files are on this PC. A question about them is a command that prints the fact. Do not say you lack access.
 cmd is the command when they asked for a command. Use the language they named.
 cmd prints a path when they named one and want it read, listed, or reported. Copy their path. display is one sentence. You have not seen it yet. Do not refuse. Do not say you cannot access it.`;
 
@@ -58,7 +61,8 @@ const SYSTEM_NOTE = `One JSON object. The first character is {.
 {"note":"one sentence of what this part adds"}
 Do not paste code.`;
 
-const SYSTEM_MARKUP = `Markdown only. Do not add or drop words.
+const SYSTEM_MARKUP = `The user pressed Format on one chat bubble. Markdown only. Do not add or drop words.
+Do not take on a new task. Do not invent files or command output.
 A list stays a list. Code stays a fenced block.`;
 
 const SYSTEM_SCAN = `You read one source file. JSON only. The first character is {.
@@ -1846,7 +1850,8 @@ function runUnitTests() {
   check("program stays in the answer", shown && !shown.cmd && !shown.plan && /puts/.test(shown.display) && shown.display.includes("\n"));
   const lifted = parseThink('{"reason":"search","display":"grep \\"error\\" /tmp/app.log\\nor\\nrg error /tmp/app.log","cmd":null}', "find error");
   check("command in the answer is runnable", lifted.cmd && /^grep /.test(lifted.cmd) && /app\.log/.test(lifted.cmd));
-  check("prompt has no sample file", !/lib\.js/.test(SYSTEM_THINK) && !/sed -n/.test(SYSTEM_THINK) && /user's computer/.test(SYSTEM_THINK) && /Do not refuse/.test(SYSTEM_THINK) && /clock/.test(SYSTEM_THINK));
+  check("prompt has no sample file", !/lib\.js/.test(SYSTEM_THINK) && !/sed -n/.test(SYSTEM_THINK) && /Reasoning line/.test(SYSTEM_THINK) && /Approve/.test(SYSTEM_THINK) && /Format/.test(SYSTEM_THINK) && /clock/.test(SYSTEM_THINK));
+  check("markup knows it is format", /pressed Format/.test(SYSTEM_MARKUP) && /Do not invent files/.test(SYSTEM_MARKUP));
   check("copied sample is rejected", copiedFromPrompt("display information about this os", { reason: "I have not read the file the user named, so I cannot summarize it yet.", display: "I'll read the whole file.", cmd: "cat /tmp/lib.js" }));
   check("intro is not the answer", thinAnswer({ display: "Here is a simple C program that prints 'hello world':", cmd: null, plan: null }));
   check("markup keeps the words", presentMarkup("prints hello", "```md\n- prints hello\n```") === "- prints hello");
