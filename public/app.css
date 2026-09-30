@@ -348,6 +348,10 @@ button.tiny {
 }
 .next-note { padding: 8px 12px; }
 .next-note:empty { display: none; }
+.risk { padding: 8px 12px; color: var(--muted); font-size: 13px; }
+.risk.high { color: #f87171; }
+button.danger { display: inline-flex; align-items: center; gap: 6px; }
+.warn-tri { display: inline-flex; color: #ef4444; }
 .term {
   margin-top: 10px;
   font-family: var(--mono);

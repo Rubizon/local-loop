@@ -2,6 +2,7 @@ const fs = require("fs");
 const path = require("path");
 const os = require("os");
 const crypto = require("crypto");
+const { spawn } = require("child_process");
 const express = require("express");
 const lib = require("./lib");
 const format = require("./public/format");
@@ -510,6 +511,38 @@ app.post("/api/scan", async (req, res) => {
   } catch (err) {
     res.status(500).json({ error: String(err.message || err) });
   }
+});
+
+app.post("/api/risk", (req, res) => {
+  const cmd = String((req.body && req.body.cmd) || "");
+  const quick = lib.assessCommand(cmd);
+  if (quick.level === "blocked") return res.json(quick);
+  const script = [
+    "const fs = require('fs');",
+    "const lib = require(" + JSON.stringify(path.join(__dirname, "lib.js")) + ");",
+    "const cmd = process.argv[1] || '';",
+    "const verdict = lib.assessCommand(cmd, function (p) {",
+    "  try { const st = fs.lstatSync(p); return st.isDirectory() ? 'directory' : 'file'; }",
+    "  catch (_) { return 'missing'; }",
+    "});",
+    "process.stdout.write(JSON.stringify(verdict));",
+  ].join("\n");
+  const child = spawn(process.execPath, ["-e", script, cmd], { timeout: 4000 });
+  let out = "";
+  let err = "";
+  child.stdout.on("data", (buf) => { out += buf.toString(); });
+  child.stderr.on("data", (buf) => { err += buf.toString(); });
+  child.on("error", () => res.json(quick.level === "low" ? { level: "high", kind: "write", why: "The check did not finish." } : quick));
+  child.on("close", (code) => {
+    if (res.headersSent) return;
+    try {
+      const verdict = JSON.parse(out);
+      if (!verdict || !verdict.level) throw new Error("empty");
+      res.json(verdict);
+    } catch (_) {
+      res.json(quick.level === "low" ? { level: "high", kind: "write", why: "The check did not finish." } : quick);
+    }
+  });
 });
 
 app.post("/api/apply", async (req, res) => {

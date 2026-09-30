@@ -629,10 +629,54 @@ function rowBtns(host, items) {
     b.textContent = it.label;
     if (it.ok) b.className = "ok";
     b.onclick = it.fn;
+    if (it.gate) {
+      b.disabled = true;
+      b.dataset.label = it.label;
+      watchRisk(b, it.gate, host);
+    }
     row.appendChild(b);
   });
   host.appendChild(row);
   return row;
+}
+
+function watchRisk(button, cmd, wrap) {
+  const line = document.createElement("div");
+  line.className = "risk";
+  line.textContent = "Checking this command.";
+  if (wrap) wrap.appendChild(line);
+  fetch("/api/risk", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ cmd: cmd }),
+  })
+    .then(function (r) { return r.json(); })
+    .then(function (verdict) { paintRisk(button, line, verdict); })
+    .catch(function () {
+      paintRisk(button, line, { level: "high", why: "The check did not finish. Treat this as a write." });
+    });
+}
+
+function paintRisk(button, line, verdict) {
+  if (!button || !button.isConnected) return;
+  const level = verdict && verdict.level;
+  const why = (verdict && verdict.why) || "Not a plain read.";
+  button.textContent = button.dataset.label || "Approve";
+  if (level === "high" || level === "blocked") {
+    const mark = document.createElement("span");
+    mark.className = "warn-tri";
+    mark.title = why;
+    mark.setAttribute("aria-label", why);
+    mark.innerHTML = '<svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 3.2 1.8 21h20.4L12 3.2z"/><path d="M12 9v5" stroke="#111" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="17" r="1.1" fill="#111"/></svg>';
+    button.prepend(mark);
+    button.classList.add("danger");
+    button.title = why;
+    if (line) {
+      line.className = "risk high";
+      line.textContent = why;
+    }
+  } else if (line && line.parentNode) line.remove();
+  button.disabled = level === "blocked";
 }
 
 function renderPending(host) {
@@ -659,6 +703,7 @@ function renderPending(host) {
     {
       label: "Approve",
       ok: true,
+      gate: pendingA.cmd,
       fn: function () {
         const job = pendingA;
         if (!job || !job.cmd) return;
@@ -781,6 +826,7 @@ function renderPlan(host) {
     items.push({
       label: "Approve",
       ok: true,
+      gate: step.cmd,
       fn: function () {
         retireActions();
         enqueueLlm("step:" + (step && step.id), "Working", function () { return runPlanStep(host); });

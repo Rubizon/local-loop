@@ -1175,6 +1175,84 @@ function assertSafeCmd(cmd) {
   return s;
 }
 
+const READ_VERBS = {
+  ls: 1, cat: 1, head: 1, tail: 1, less: 1, more: 1, sed: 1, awk: 1, wc: 1, grep: 1, rg: 1,
+  egrep: 1, fgrep: 1, find: 1, stat: 1, file: 1, du: 1, df: 1, pwd: 1, date: 1, hostname: 1,
+  whoami: 1, id: 1, uname: 1, uptime: 1, free: 1, ps: 1, pgrep: 1, cal: 1, printenv: 1, env: 1,
+  which: 1, type: 1, command: 1, echo: 1, printf: 1, true: 1, false: 1, test: 1, basename: 1,
+  dirname: 1, readlink: 1, realpath: 1, nl: 1, sort: 1, uniq: 1, cut: 1, tr: 1, diff: 1, cmp: 1,
+  sha256sum: 1, md5sum: 1, cksum: 1, od: 1, hexdump: 1, strings: 1, tree: 1, whereis: 1,
+  getconf: 1, nproc: 1, lscpu: 1, dmesg: 1, journalctl: 1, ss: 1, netstat: 1,
+};
+
+function commandPaths(cmd) {
+  const found = [];
+  const re = /(?:^|[\s'"])(\/(?:[\w.+@=-]+\/)*[\w.+@=-]+)/g;
+  let match;
+  const text = String(cmd || "");
+  while ((match = re.exec(text))) {
+    if (found.indexOf(match[1]) === -1) found.push(match[1]);
+  }
+  return found.slice(0, 6);
+}
+
+function writesAFile(part) {
+  const stripped = String(part || "").replace(/\d*>&\d+/g, "").replace(/\d*>&-/g, "");
+  return /(?:^|[^>&])>>?/.test(stripped);
+}
+
+function leadingVerb(part) {
+  const text = String(part || "").trim().replace(/^(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)+/, "");
+  const match = text.match(/^([A-Za-z0-9._+-]+)\s*([\s\S]*)$/);
+  return { verb: match ? match[1].toLowerCase() : "", rest: match ? match[2] : text };
+}
+
+function classifyPart(part) {
+  if (writesAFile(part)) return { level: "high", why: "Writes a file." };
+  const bit = leadingVerb(part);
+  const verb = bit.verb;
+  const rest = bit.rest || "";
+  if (!verb) return { level: "high", why: "Not a plain read." };
+  if (verb === "sed" && /(?:^|\s)-i\b|--in-place/.test(rest)) return { level: "high", why: "Edits a file in place." };
+  if (verb === "find" && /(?:^|\s)-(delete|exec|execdir|ok)\b/.test(rest)) return { level: "high", why: "Find would change or run files." };
+  if (verb === "git") {
+    if (/^(status|log|diff|show|rev-parse)\b/.test(rest.trim())) return { level: "low", why: "Read only." };
+    return { level: "high", why: "Changes the repository." };
+  }
+  if (verb === "rm" || verb === "rmdir" || verb === "unlink" || verb === "shred") return { level: "high", why: "Deletes files." };
+  if (verb === "mv") return { level: "high", why: "Moves or replaces files." };
+  if (/^(dd|mkfs|chmod|chown|chgrp|truncate|kill|pkill|killall|reboot|shutdown|halt|poweroff|wipefs|fdisk|parted)$/.test(verb)) {
+    return { level: "high", why: "Changes the machine." };
+  }
+  if (/^(python|python3|perl|ruby|node|php|bash|sh|zsh)$/.test(verb)) {
+    if (/\brm\b|unlink|rmtree|os\.remove|open\([^)]*['"]w/.test(rest)) return { level: "high", why: "The program writes or deletes." };
+    if (/^(python3?|node)$/.test(verb) && /\bprint\(/.test(rest) && !/\bopen\(/.test(rest)) return { level: "low", why: "Read only." };
+    return { level: "high", why: "Runs a program." };
+  }
+  if (READ_VERBS[verb]) return { level: "low", why: "Read only." };
+  return { level: "high", why: "Not a plain read." };
+}
+
+function assessCommand(cmd, stat) {
+  const text = String(cmd || "").trim();
+  if (!text) return { level: "blocked", kind: "empty", why: "No command." };
+  if (/[\n\r]/.test(text) || DENY_CMD.test(text)) return { level: "blocked", kind: "blocked", why: "This command is blocked." };
+  const parts = text.split(/\s*(?:&&|\|\||;|\|)\s*/).filter(Boolean);
+  let verdict = { level: "low", kind: "read", why: "Read only." };
+  for (let i = 0; i < parts.length; i++) {
+    const bit = classifyPart(parts[i]);
+    if (bit.level === "high") {
+      verdict = { level: "high", kind: "write", why: bit.why };
+      break;
+    }
+  }
+  if (verdict.level === "high" && typeof stat === "function") {
+    const looked = commandPaths(text).map((p) => p + " (" + stat(p) + ")").slice(0, 4);
+    if (looked.length) verdict.why = verdict.why + " " + looked.join(", ") + ".";
+  }
+  return verdict;
+}
+
 function safeRelPath(p, root) {
   if (typeof p !== "string" || !p.trim()) throw new Error("bad path");
   if (path.isAbsolute(p)) throw new Error("absolute paths not allowed");
@@ -2181,6 +2259,12 @@ function runUnitTests() {
   const emit = heuristicEmit(angry.steps[2], "KEEP GOAL: x\nFACT: I hate this bug. Furious.");
   check("emit csv", emit && /angry\.csv/.test(emit.cmd || ""));
   check("parseEmit", parseEmit('{"cmd":null,"ask":"where?"}').ask === "where?");
+  check("ls is a low risk read", assessCommand("ls -la /tmp").level === "low");
+  check("sed print is a low risk read", assessCommand("sed -n '1,20p' /tmp/lib.js").level === "low");
+  check("grep pipe stays a read", assessCommand("grep -n foo /tmp/a | head").level === "low");
+  check("rm is a high risk write", assessCommand("rm /tmp/a.txt").level === "high" && /Deletes/.test(assessCommand("rm /tmp/a.txt").why));
+  check("redirect is a high risk write", assessCommand("echo hi > /tmp/a.txt").level === "high");
+  check("rm of the root is blocked", assessCommand("rm -rf /").level === "blocked");
   check("system compact", SYSTEM_A.length < 500 && SYSTEM_CHECK.length < 400 && SYSTEM_A.includes("Hello.") && SYSTEM_CHECK.includes('"ok":true') && SYSTEM_REWRITE.includes("KEEP GOAL") && SYSTEM_EMIT.includes("JSON"));
   return { ok: results.every((r) => r.ok), passed: results.filter((r) => r.ok).length, total: results.length, results };
 }
@@ -2207,6 +2291,8 @@ module.exports = {
   clip,
   chunkText,
   readPathFromCmd,
+  assessCommand,
+  commandPaths,
   hasGoal,
   keepLines,
   clipContext,
