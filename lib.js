@@ -421,8 +421,63 @@ function safeFileName(name) {
   return n;
 }
 
-function fileWritePlan(text) {
+function fileFromContext(context) {
+  const lines = String(context || "").split("\n").filter((l) => /GOAL:|DONE:/.test(l));
+  const blob = lines.join("\n");
+  const found = [];
+  const re = /\b([A-Za-z0-9_-]+\.[A-Za-z][A-Za-z0-9]{0,7})\b/g;
+  let match;
+  while ((match = re.exec(blob))) {
+    const name = safeFileName(match[1]);
+    if (name) found.push(name);
+  }
+  return found.length ? found[found.length - 1] : null;
+}
+
+function writeCmd(file, content, append) {
+  const body = String(content).replace(/\\/g, "\\\\").replace(/'/g, "\\'").replace(/"/g, '\\"').replace(/\$/g, "\\$").replace(/`/g, "\\`");
+  return "python3 -c \"open('" + file + "','" + (append ? "a" : "w") + "').write('" + body + "\\n')\"";
+}
+
+function contentWrite(text, context) {
+  const t = String(text || "").trim();
+  if (!/\b(write|put|append|add|save)\b/i.test(t)) return null;
+  if (/(\d+)\s*(?:->|to|through|…|\.{2,}|-)\s*(\d+)/i.test(t) && !/["'][^"']+["']/.test(t)) return null;
+  const quoted = (t.match(/["']([^"']+)["']/) || [])[1] || "";
+  const files = [];
+  const re = /\b([A-Za-z0-9_-]+\.[A-Za-z][A-Za-z0-9]{0,7})\b/g;
+  let match;
+  while ((match = re.exec(t))) {
+    const name = safeFileName(match[1]);
+    if (name && files.indexOf(name) === -1) files.push(name);
+  }
+  if (quoted && safeFileName(quoted) && files.length === 1 && files[0] === quoted) return null;
+  let file = files.find((name) => name !== quoted) || null;
+  if (!file && quoted && !safeFileName(quoted)) file = fileFromContext(context);
+  let content = quoted;
+  if (!content && file) {
+    content = t
+      .replace(file, " ")
+      .replace(/\b(write|put|append|add|save|into|onto|the|file|a|an|this|that|in|to|please)\b/gi, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+  if (!file || !content || content === file || safeFileName(content) === file) return null;
+  return { file: file, content: content, append: /\bappend\b/i.test(t) };
+}
+
+function fileWritePlan(text, context) {
   const t = String(text || "");
+  const filling = contentWrite(t, context);
+  if (filling) {
+    return {
+      goal: "KEEP GOAL: write into " + filling.file,
+      cursor: 0,
+      steps: [
+        { id: "1", do: "Write into " + filling.file, need: "", expect: "file contains the text", attach: "paths", cmd: writeCmd(filling.file, filling.content, filling.append), status: "todo" },
+      ],
+    };
+  }
   const named = t.match(/["']([A-Za-z0-9._-]+)["']/) || t.match(/\b([A-Za-z0-9._-]+\.[A-Za-z0-9]+)\b/);
   const file = safeFileName(named && named[1]);
   if (!file || !/\b(write|create|save|put)\b/i.test(t)) return null;
@@ -796,7 +851,10 @@ function rememberAnswer(context, display) {
   if (!hasGoal(context)) return String(context || "");
   const bit = clip(String(display || "").replace(/\s+/g, " "), 160);
   if (bit.length < 8) return String(context || "");
-  return clipContext(String(context || "").replace(/\s*$/, "") + "\nFACT: " + bit);
+  if (/\?/.test(bit) || /\b(clarif|do you want|which file|or create)\b/i.test(bit)) return String(context || "");
+  const line = "FACT: " + bit;
+  if (String(context || "").indexOf(line) !== -1) return String(context || "");
+  return clipContext(String(context || "").replace(/\s*$/, "") + "\n" + line);
 }
 
 function thinAnswer(thought) {
@@ -871,6 +929,19 @@ function localTurn(text, context) {
       needsModel: false,
     };
     decided.reason = "One Python command joins the files here. Nothing runs until you approve.";
+    return decided;
+  }
+  const written = fileWritePlan(text, context);
+  if (written && written.steps && written.steps.length) {
+    const decided = {
+      mode: "B",
+      why: "write",
+      display: "Plan: " + String(written.goal || "").replace(/^KEEP GOAL:\s*/i, ""),
+      cmd: written.steps[0].cmd || null,
+      plan: written,
+      needsModel: false,
+    };
+    decided.reason = reasonFor(decided);
     return decided;
   }
   const pick = pickMode(text, context, null);
@@ -1841,6 +1912,9 @@ const USER_SCENARIOS = [
   { name: "list /usr", harness: true, pass: () => localTurn("show files in /usr", "").cmd === "ls -la /usr" },
   { name: "create todo.txt", harness: true, pass: () => { const t = localTurn("create a file todo.txt", ""); return !!(t.plan && /todo\.txt/.test(t.plan.steps[0].cmd || "")); } },
   { name: "write 5 to 9", harness: true, pass: () => { const t = localTurn("write 5 to 9 into the file seq.txt", ""); return !!(t.plan && /range\(5,10\)/.test(t.plan.steps[0].cmd || "")); } },
+  { name: "write hello into foo", harness: true, pass: () => { const t = localTurn('write "hello world" into foo.txt', "KEEP GOAL: create foo.txt"); return !!(t.plan && !t.needsModel && /foo\.txt/.test(t.plan.steps[0].cmd || "") && /hello world/.test(t.plan.steps[0].cmd || "")); } },
+  { name: "write into the open file", harness: true, pass: () => { const t = localTurn('write into the file "hello world"', "KEEP GOAL: create foo.txt\nDONE: Write foo.txt"); return !!(t.plan && /foo\.txt/.test(t.plan.steps[0].cmd || "") && /hello world/.test(t.plan.steps[0].cmd || "")); } },
+  { name: "question is not a fact", harness: true, pass: () => rememberAnswer("KEEP GOAL: create foo.txt", "I need to clarify: do you want a file named hello?") === "KEEP GOAL: create foo.txt" },
   { name: "block sudo", harness: true, pass: () => { try { assertSafeCmd("sudo reboot"); return false; } catch (_) { return true; } } },
   { name: "block mkfs", harness: true, pass: () => { try { assertSafeCmd("mkfs.ext4 /dev/sda"); return false; } catch (_) { return true; } } },
   { name: "block rm -rf /", harness: true, pass: () => { try { assertSafeCmd("rm -rf /"); return false; } catch (_) { return true; } } },
