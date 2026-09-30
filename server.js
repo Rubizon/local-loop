@@ -317,12 +317,21 @@ app.post("/api/turn", async (req, res) => {
         context,
       });
     }
-    const raw = await ollamaText(
+    const rawFirst = await ollamaText(
       lib.SYSTEM_THINK,
       "User:\n" + lib.clip(text, 2000) + "\n\nState:\n" + (context || "(empty)"),
-      500
+      700
     );
-    const thought = lib.parseThink(raw, text);
+    let thought = lib.parseThink(rawFirst, text);
+    if (lib.thinAnswer(thought)) {
+      const rawAgain = await ollamaText(
+        lib.SYSTEM_THINK,
+        "User:\n" + lib.clip(text, 2000) + "\n\nThe display must be the full answer, including the program. Do not stop after an introduction.\n\nState:\n" + (context || "(empty)"),
+        700
+      );
+      const again = lib.parseThink(rawAgain, text);
+      if (again.display && !lib.thinAnswer(again)) thought = again;
+    }
     if (thought.plan && thought.plan.steps && thought.plan.steps.length) {
       const cmd = thought.plan.steps[0].cmd;
       if (cmd) {

@@ -42,10 +42,11 @@ const SYSTEM_REPLAN = `Revise remaining steps after a failed checkpoint. JSON on
 Keep finished work. 1-5 remaining steps. Do not repeat done steps.`;
 
 const SYSTEM_THINK = `Think, then one JSON object. The first character is {.
-{"reason":"what you need, and why","display":"one sentence","cmd":"one shell command or null"}
-If you have not seen the thing the user asked about, do not describe it. Put the read in cmd.
+{"reason":"why","display":"the full answer","cmd":null}
+If they asked for text or a program, put that text in display. Use \\n between lines. Do not stop after an introduction. cmd stays null.
+If you have not seen a file they named, do not describe it. Put the read in cmd.
 Example: {"reason":"I have not read the file the user named, so I cannot summarize it yet.","display":"I'll read the whole file.","cmd":"cat /tmp/lib.js"}
-Question example: {"reason":"No file or command is needed.","display":"4","cmd":null}`;
+Question example: {"reason":"No command is needed.","display":"4","cmd":null}`;
 
 const SYSTEM_SAY = `Report the command output. JSON only. The first character is {.
 {"say":"plain sentences about what the output shows"}
@@ -473,7 +474,7 @@ function heuristicPlan(text) {
 
 function salvageField(raw, key) {
   const m = String(raw || "").match(new RegExp('"' + key + '"\\s*:\\s*"((?:\\\\.|[^"\\\\])*)"'));
-  return m ? m[1].replace(/\\n/g, " ").replace(/\\"/g, '"').trim() : "";
+  return m ? m[1].replace(/\\n/g, "\n").replace(/\\"/g, '"').trim() : "";
 }
 
 function parseThink(raw, userText) {
@@ -517,6 +518,11 @@ function parseThink(raw, userText) {
     if (!plan.steps[0].cmd && cmd) plan.steps[0].cmd = cmd;
   }
   return { reason, display, cmd: plan && plan.steps[0] ? plan.steps[0].cmd : cmd, plan, failed: !plan && !cmd && !display };
+}
+
+function thinAnswer(thought) {
+  const display = String((thought && thought.display) || "").trim();
+  return !!(thought && !thought.cmd && !thought.plan && display && /:\s*$/.test(display) && !display.includes("\n"));
 }
 
 function reasonFor(decided) {
@@ -963,6 +969,14 @@ function diagnoseReply(kind, raw) {
     if (display.startsWith("{")) return "display is raw JSON";
     return "python command with a reason";
   }
+  if (kind === "code") {
+    const display = typeof parsed.display === "string" ? parsed.display.trim() : "";
+    const cmd = typeof parsed.cmd === "string" ? parsed.cmd.trim() : "";
+    if (cmd) return "put the program in a command instead of the answer: " + clip(cmd, 70);
+    if (!display || /:\s*$/.test(display)) return "introduction only, the program is missing";
+    if (!/#include|printf|puts/.test(display)) return "answer has no C program. Starts: " + clip(display, 80);
+    return "shows the program";
+  }
   return "unknown probe";
 }
 
@@ -1101,6 +1115,12 @@ function scoreWorkflow(kind, raw) {
     const cmd = typeof parsed.cmd === "string" ? parsed.cmd.trim() : "";
     ok = !!(reason && /python/.test(cmd) && !display.startsWith("{"));
     detail = ok ? "python command" : diagnosis;
+  } else if (kind === "code") {
+    name = "Code";
+    const display = typeof parsed.display === "string" ? parsed.display.trim() : "";
+    const cmd = typeof parsed.cmd === "string" ? parsed.cmd.trim() : "";
+    ok = !cmd && !/:\s*$/.test(display) && /#include|printf|puts/.test(display);
+    detail = ok ? "shows the program" : diagnosis;
   } else {
     detail = "unknown probe";
   }
@@ -1157,6 +1177,12 @@ const WORKFLOW_PROBES = [
     system: SYSTEM_THINK,
     user: "User: write a short python command to concatenate all files in a directory.\nThe first character of your reply is {. Keep the JSON short.",
     predict: 220,
+  },
+  {
+    kind: "code",
+    system: SYSTEM_THINK,
+    user: "User: write a simple C program that prints hello world\nThe first character of your reply is {.",
+    predict: 400,
   },
 ];
 
@@ -1258,6 +1284,11 @@ function runUnitTests() {
   check("workflow verdict accepts error", scoreWorkflow("verdict", '{"ok":true,"why":"fine"}').ok === false);
   check("workflow concat", scoreWorkflow("concat", '{"reason":"The files have not been joined.","display":"I will concatenate them.","cmd":"python3 -c \\"print(1)\\""}').ok === true);
   check("workflow concat needs python", scoreWorkflow("concat", '{"reason":"ok","display":"I will list them.","cmd":"ls"}').ok === false);
+  check("workflow code", scoreWorkflow("code", '{"reason":"They asked to see it.","display":"#include <stdio.h>\\nint main(void) { puts(\\"hello world\\"); }","cmd":null}').ok === true);
+  check("workflow code intro", scoreWorkflow("code", '{"reason":"basic task","display":"Here is a simple C program that prints hello world:","cmd":null}').ok === false);
+  const shown = parseThink('{"reason":"They asked for the program.","display":"#include <stdio.h>\\nint main(void) {\\n  puts(\\"hello world\\");\\n}","cmd":null}', "write a simple C program");
+  check("program stays in the answer", shown && !shown.cmd && !shown.plan && /puts/.test(shown.display) && shown.display.includes("\n"));
+  check("intro is not the answer", thinAnswer({ display: "Here is a simple C program that prints 'hello world':", cmd: null, plan: null }));
   const parts = chunkText("one\ntwo\nthree\nfour", 8);
   check("chunks cover the text", parts.length >= 2 && parts.join("\n").includes("one") && parts.join("\n").includes("four"));
   check("read path from sed", readPathFromCmd("sed -n '1,160p' /home/user/local-loop/lib.js") === "/home/user/local-loop/lib.js");
@@ -1377,6 +1408,7 @@ module.exports = {
   parseDirect,
   parsePlan,
   parseThink,
+  thinAnswer,
   cleanDisplay,
   parseCheck,
   parseEmit,
