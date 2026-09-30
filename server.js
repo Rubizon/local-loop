@@ -323,14 +323,14 @@ app.post("/api/turn", async (req, res) => {
       700
     );
     let thought = lib.parseThink(rawFirst, text);
-    if (lib.thinAnswer(thought)) {
+    if (lib.thinAnswer(thought) || lib.copiedFromPrompt(text, thought)) {
       const rawAgain = await ollamaText(
         lib.SYSTEM_THINK,
-        "User:\n" + lib.clip(text, 2000) + "\n\nThe display must be the full answer, including the program. Do not stop after an introduction.\n\nState:\n" + (context || "(empty)"),
+        "User:\n" + lib.clip(text, 2000) + "\n\nAnswer this user only. Do not repeat an example. Do not name a file they did not name.\n\nState:\n" + (context || "(empty)"),
         700
       );
       const again = lib.parseThink(rawAgain, text);
-      if (again.display && !lib.thinAnswer(again)) thought = again;
+      if (again.display && !lib.thinAnswer(again) && !lib.copiedFromPrompt(text, again)) thought = again;
     }
     if (thought.plan && thought.plan.steps && thought.plan.steps.length) {
       const cmd = thought.plan.steps[0].cmd;

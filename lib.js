@@ -42,11 +42,13 @@ const SYSTEM_REPLAN = `Revise remaining steps after a failed checkpoint. JSON on
 Keep finished work. 1-5 remaining steps. Do not repeat done steps.`;
 
 const SYSTEM_THINK = `Think, then one JSON object. The first character is {.
-{"reason":"why","display":"the full answer","cmd":null}
-If they asked for text or a program, put that text in display. Use \\n between lines. Do not stop after an introduction. cmd stays null.
-If you have not seen a file they named, do not describe it. Put the read in cmd.
-Example: {"reason":"I have not read the file the user named, so I cannot summarize it yet.","display":"I'll read the whole file.","cmd":"cat /tmp/lib.js"}
-Question example: {"reason":"No command is needed.","display":"4","cmd":null}`;
+{"reason":"your own words","display":"what the user should read","cmd":null}
+cmd is one shell command, or null when the answer is already in display.
+The command must be for what the user just asked. Never name a file they did not name.
+If they named a file, cmd reads that file. You do not have its contents yet.
+If cmd is set, display is one sentence about what you will run. Do not invent the output.
+If they asked for text or a program, put that text in display. Use \\n between lines. cmd stays null.
+If they asked about this machine and named no file, use a real command that reports the machine. Do not invent a path.`;
 
 const SYSTEM_SAY = `Report the command output. JSON only. The first character is {.
 {"say":"plain sentences about what the output shows"}
@@ -533,6 +535,15 @@ function parseThink(raw, userText) {
     if (!plan.steps[0].cmd && cmd) plan.steps[0].cmd = cmd;
   }
   return { reason, display, cmd: plan && plan.steps[0] ? plan.steps[0].cmd : cmd, plan, failed: !plan && !cmd && !display };
+}
+
+function copiedFromPrompt(userText, thought) {
+  const blob = [thought && thought.cmd, thought && thought.reason, thought && thought.display].join("\n");
+  const user = String(userText || "");
+  if (/lib\.js/.test(blob) && !/lib\.js/.test(user)) return true;
+  if (/I have not read the file the user named/.test(blob)) return true;
+  if (/I'll read the whole file/.test(blob) && !/whole file/.test(user)) return true;
+  return false;
 }
 
 function thinAnswer(thought) {
@@ -1340,6 +1351,17 @@ const USER_SCENARIOS = [
     fixture: '{"reason":"date prints it.","display":"Use date.","cmd":"date"}',
     pass: (raw) => { const t = parseThink(raw, ""); return !!(t.cmd && /\bdate\b/.test(t.cmd) && !DENY_CMD.test(t.cmd)); },
   },
+  {
+    name: "os info",
+    system: SYSTEM_THINK,
+    user: "User: display information about this os\nThe first character of your reply is {.",
+    predict: 160,
+    fixture: '{"reason":"Need the kernel and the distro from this machine.","display":"I will ask the system.","cmd":"uname -a"}',
+    pass: (raw) => {
+      const t = parseThink(raw, "display information about this os");
+      return !!(t.cmd && !/lib\.js/.test(t.cmd) && !copiedFromPrompt("display information about this os", t) && /uname|os-release|hostnamectl|lsb_release/.test(t.cmd));
+    },
+  },
 ];
 
 function runUnitTests() {
@@ -1447,7 +1469,8 @@ function runUnitTests() {
   check("program stays in the answer", shown && !shown.cmd && !shown.plan && /puts/.test(shown.display) && shown.display.includes("\n"));
   const lifted = parseThink('{"reason":"search","display":"grep \\"error\\" /tmp/app.log\\nor\\nrg error /tmp/app.log","cmd":null}', "find error");
   check("command in the answer is runnable", lifted.cmd && /^grep /.test(lifted.cmd) && /app\.log/.test(lifted.cmd));
-  check("intro is not the answer", thinAnswer({ display: "Here is a simple C program that prints 'hello world':", cmd: null, plan: null }));
+  check("prompt has no sample file", !/lib\.js/.test(SYSTEM_THINK) && !/I'll read the whole file/.test(SYSTEM_THINK));
+  check("copied sample is rejected", copiedFromPrompt("display information about this os", { reason: "I have not read the file the user named, so I cannot summarize it yet.", display: "I'll read the whole file.", cmd: "cat /tmp/lib.js" }));
   const parts = chunkText("one\ntwo\nthree\nfour", 8);
   check("chunks cover the text", parts.length >= 2 && parts.join("\n").includes("one") && parts.join("\n").includes("four"));
   check("read path from sed", readPathFromCmd("sed -n '1,160p' /home/user/local-loop/lib.js") === "/home/user/local-loop/lib.js");
@@ -1568,6 +1591,7 @@ module.exports = {
   parsePlan,
   parseThink,
   thinAnswer,
+  copiedFromPrompt,
   USER_SCENARIOS,
   runUserScenarios,
   cleanDisplay,
