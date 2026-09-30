@@ -46,10 +46,11 @@ const SYSTEM_THINK = `Think, then one JSON object. The first character is {.
 {"reason":"your own words","display":"what the user should read","cmd":null}
 cmd is one shell command, or null when the answer is already in display.
 The command must be for what the user just asked. Never name a file they did not name.
-If they named a file, cmd reads that file. You do not have its contents yet.
-If cmd is set, display is one sentence about what you will run. Do not invent the output.
+A question with no file and no machine fact has cmd null.
 If they asked for text or a program, put that text in display. Use \\n between lines. cmd stays null.
-If they asked about this machine and named no file, use a real command that reports the machine. Do not invent a path.`;
+If they asked about this machine and named no file, use a real command that reports the machine. Do not invent a path.
+If cmd is set, display is one sentence about what you will run. Do not invent the output.
+If they named a file to read, report, or summarize, you have not seen it yet. cmd is sed -n '1,160p' plus that path, copied exactly. display is one sentence. Do not say the file is unavailable, missing, or inaccessible.`;
 
 const SYSTEM_SAY = `Report the command output. JSON only. The first character is {.
 {"say":"plain sentences about what the output shows"}
@@ -1843,7 +1844,7 @@ function runUnitTests() {
   check("program stays in the answer", shown && !shown.cmd && !shown.plan && /puts/.test(shown.display) && shown.display.includes("\n"));
   const lifted = parseThink('{"reason":"search","display":"grep \\"error\\" /tmp/app.log\\nor\\nrg error /tmp/app.log","cmd":null}', "find error");
   check("command in the answer is runnable", lifted.cmd && /^grep /.test(lifted.cmd) && /app\.log/.test(lifted.cmd));
-  check("prompt has no sample file", !/lib\.js/.test(SYSTEM_THINK) && !/I'll read the whole file/.test(SYSTEM_THINK));
+  check("prompt has no sample file", !/lib\.js/.test(SYSTEM_THINK) && !/I'll read the whole file/.test(SYSTEM_THINK) && /unavailable/.test(SYSTEM_THINK) && /sed -n '1,160p'/.test(SYSTEM_THINK));
   check("copied sample is rejected", copiedFromPrompt("display information about this os", { reason: "I have not read the file the user named, so I cannot summarize it yet.", display: "I'll read the whole file.", cmd: "cat /tmp/lib.js" }));
   check("intro is not the answer", thinAnswer({ display: "Here is a simple C program that prints 'hello world':", cmd: null, plan: null }));
   check("markup keeps the words", presentMarkup("prints hello", "```md\n- prints hello\n```") === "- prints hello");
