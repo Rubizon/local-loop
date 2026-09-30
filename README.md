@@ -60,6 +60,8 @@ bash run.sh qwen3:4b-instruct
 
 Open http://127.0.0.1:3847
 
+Each start of the server picks a new id. The page checks it every few seconds. When the id changes, the page reloads, so a restart does not leave you on the old page. A failed check, while the process is down, does not reload.
+
 `run.sh` fetches `origin/main` and resets this checkout. Local edits to tracked files are discarded. `data/` is left alone, and that is where State is stored. Set `PORT` if 3847 is taken. With no argument the model is `OLLAMA_MODEL` or `qwen2.5-coder:3b-8k`.
 
 ```bash

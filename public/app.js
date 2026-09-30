@@ -476,10 +476,32 @@ async function updateBudget() {
   }
 }
 
+var serverUid = "";
+var reloading = false;
+function noteUid(uid) {
+  if (!uid || reloading) return;
+  if (!serverUid) {
+    serverUid = String(uid);
+    return;
+  }
+  if (String(uid) !== serverUid) {
+    reloading = true;
+    location.reload();
+  }
+}
+function watchServer() {
+  fetch("/api/uid", { cache: "no-store" })
+    .then(function (r) { return r.ok ? r.json() : null; })
+    .then(function (d) { if (d) noteUid(d.uid); })
+    .catch(function () {});
+}
+setInterval(watchServer, 3000);
+
 async function refresh() {
-  const r = await fetch("/api/state");
+  const r = await fetch("/api/state", { cache: "no-store" });
   if (!r.ok) throw new Error("HTTP " + r.status);
   const s = await r.json();
+  noteUid(s.uid);
   setText(chipModel, s.model || "model");
   setText(chipCwd, "cwd " + (s.cwd || s.workspace || ""));
   if (chipCwd) chipCwd.title = s.cwd || s.workspace || "";
@@ -765,6 +787,7 @@ async function checkpoint(result, host) {
       .then(function (r) { return r.json(); })
       .then(function (s) {
         if (!watch || !s) return;
+        noteUid(s.uid);
         renderContext(s.context || "");
         paintLive(s.context || "");
         const next = String(s.context || "").split("\n").find(function (l) { return /^NEXT:/.test(l); });
@@ -823,6 +846,7 @@ async function runScan(host) {
       .then(function (r) { return r.json(); })
       .then(function (s) {
         if (!watch || !s) return;
+        noteUid(s.uid);
         renderContext(s.context || "");
         const next = String(s.context || "").split("\n").find(function (l) { return /^NEXT:/.test(l); });
         if (next) setBusy(true, next.replace(/^NEXT:\s*/, ""));

@@ -20,6 +20,7 @@ function freshCwd() {
 }
 
 let sessionCwd = freshCwd();
+const SERVER_UID = crypto.randomBytes(8).toString("hex");
 const CWD_ALLOW = [WORKSPACE, "/tmp", os.homedir()].map((p) => path.resolve(p));
 let ledger = [];
 let lastGoodStep = null;
@@ -182,8 +183,14 @@ app.post("/api/drop", (req, res) => {
   }
 });
 
+app.get("/api/uid", (_req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  res.json({ uid: SERVER_UID });
+});
+
 app.get("/api/state", (_req, res) => {
   res.json({
+    uid: SERVER_UID,
     model: OLLAMA_MODEL,
     workspace: WORKSPACE,
     cwd: sessionCwd,
