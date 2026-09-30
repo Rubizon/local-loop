@@ -113,12 +113,19 @@ app.get("/api/state", (_req, res) => {
 });
 app.get("/api/selftest", (_req, res) => res.json(lib.runUnitTests()));
 app.post("/api/model-test", async (_req, res) => {
+  const checks = [];
   try {
-    const raw = await ollamaText(lib.SYSTEM_A, lib.MODEL_PROBE_USER, 80);
-    const parsed = lib.parseDirect(raw);
-    res.json({ model: OLLAMA_MODEL, raw: lib.clip(raw, 400), ...lib.scoreModelReply(parsed, raw) });
+    for (const probe of lib.WORKFLOW_PROBES) {
+      try {
+        const raw = await ollamaText(probe.system, probe.user, probe.predict);
+        checks.push(lib.scoreWorkflow(probe.kind, raw));
+      } catch (err) {
+        checks.push({ name: probe.kind, ok: false, detail: String(err.message || err) });
+      }
+    }
+    res.json({ model: OLLAMA_MODEL, ok: checks.every((c) => c.ok), checks });
   } catch (err) {
-    res.status(500).json({ ok: false, error: String(err.message || err), model: OLLAMA_MODEL });
+    res.status(500).json({ ok: false, error: String(err.message || err), model: OLLAMA_MODEL, checks });
   }
 });
 
@@ -324,10 +331,18 @@ app.post("/api/check", async (req, res) => {
       const more = (plan.steps || []).some((s) => s.id !== step.id && s.status !== "ok");
       if (more && (check.next === "done" || check.next === step.id)) check.next = "next";
     }
-    check.context = lib.stepState(plan, step, result, check.ok, context);
+    const summary = lib.summarizeOutput(String((result && result.cmd) || ""), String((result && result.stdout) || ""));
+    let stamped = plan;
+    if (summary && check.ok) {
+      stamped = {
+        ...plan,
+        steps: (plan.steps || []).map((s) => (s.id === step.id ? { ...s, note: summary } : s)),
+      };
+    }
+    check.context = lib.stepState(stamped, step, result, check.ok, context);
     if (lib.overflow(context, result.stdout || "") && check.attach === "full") check.attach = "summary";
     const snippet = lib.applyAttach(check.attach, result.cmd, result);
-    let nextPlan = lib.mark(plan, step.id, check.ok ? "ok" : check.ask ? "ask" : "fail");
+    let nextPlan = lib.mark(stamped, step.id, check.ok ? "ok" : check.ask ? "ask" : "fail");
     if (check.startOver) {
       ledger = lib.rollbackAfter(ledger, null);
       lastGoodStep = null;

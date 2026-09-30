@@ -350,9 +350,21 @@ function stepState(plan, step, result, ok, prev) {
   if (ok && nxt) lines.push("NEXT: " + nxt.do + (nxt.need ? " — use " + nxt.need : " — use the fact below"));
   else if (!ok) lines.push("NEXT: retry " + step.do + " — " + (step.expect || "the command must succeed"));
   else lines.push("NEXT: none. The plan is finished.");
-  const fact = summarizeOutput((result && result.cmd) || "", (result && result.stdout) || "");
-  if (fact) lines.push("FACT: " + fact);
-  else String(prev || "").split("\n").filter((l) => /^FACT:/.test(l)).forEach((l) => lines.push(l));
+  const facts = [];
+  const addFact = (text) => {
+    const raw = String(text || "").trim();
+    if (!raw) return;
+    const line = /^FACT:/.test(raw) ? raw : "FACT: " + raw;
+    if (!facts.includes(line)) facts.push(line);
+  };
+  steps.forEach((s) => addFact(s.note));
+  String(prev || "")
+    .split("\n")
+    .forEach((l) => {
+      if (/^FACT:/.test(l.trim())) addFact(l.trim());
+    });
+  addFact(summarizeOutput((result && result.cmd) || "", (result && result.stdout) || ""));
+  facts.forEach((l) => lines.push(l));
   const done = steps.filter((s) => s.status === "ok" || (ok && s.id === step.id)).map((s) => s.do);
   if (done.length) lines.push("DONE: " + done.join("; "));
   return clipContext(lines.join("\n"));
@@ -484,6 +496,48 @@ function scoreModelReply(parsed, rawText) {
   return { ok: checks.every((c) => c.ok), passed: checks.filter((c) => c.ok).length, total: checks.length, checks, display: parsed && parsed.display };
 }
 
+function scoreWorkflow(kind, raw) {
+  const parsed = extractJson(raw);
+  if (parsed._raw) return { name: kind, ok: false, detail: "no JSON" };
+  if (kind === "direct") {
+    const ok = typeof parsed.display === "string" && parsed.display.trim().length > 0;
+    return { name: "Direct", ok, detail: ok ? "answers in JSON" : "missing display" };
+  }
+  if (kind === "plan") {
+    const steps = Array.isArray(parsed.steps) ? parsed.steps : [];
+    const ok = steps.length >= 1 && steps.every((s) => s && String(s.do || s.text || "").trim());
+    return { name: "Plan", ok, detail: ok ? steps.length + " steps" : "missing steps" };
+  }
+  if (kind === "check") {
+    const ok = asOk(parsed.ok) !== null;
+    return { name: "Check", ok, detail: ok ? "can judge a step" : "missing ok" };
+  }
+  if (kind === "emit") {
+    const cmd = typeof parsed.cmd === "string" && parsed.cmd.trim();
+    const ask = typeof parsed.ask === "string" && parsed.ask.trim();
+    const ok = !!(cmd || ask);
+    return { name: "Emit", ok, detail: ok ? (cmd ? "returns a command" : "asks a question") : "missing command" };
+  }
+  return { name: kind, ok: false, detail: "unknown probe" };
+}
+
+const WORKFLOW_PROBES = [
+  { kind: "direct", system: SYSTEM_A, user: "User: say hello. Do not run a command.", predict: 80 },
+  { kind: "plan", system: SYSTEM_PLAN, user: "User: list /tmp and then write a one-page PDF summary of the names.", predict: 420 },
+  {
+    kind: "check",
+    system: SYSTEM_CHECK,
+    user: "Step 1: List /tmp\nExpect: names from /tmp\nCommand: ls -la /tmp exit 0\nOutput:\nalpha\nbeta",
+    predict: 220,
+  },
+  {
+    kind: "emit",
+    system: SYSTEM_EMIT,
+    user: "State:\nKEEP GOAL: write a pdf\nFACT: names (2): alpha, beta\n\nStep 2: Write a PDF summary of those names\nNeed: FACT names\nExpect: pdf file exists",
+    predict: 180,
+  },
+];
+
 function runUnitTests() {
   const results = [];
   const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detail || (ok ? "ok" : "fail") });
@@ -506,6 +560,12 @@ function runUnitTests() {
   check("pdf plan", pdfPlan && /PDF/.test(pdfPlan.goal) && pdfPlan.steps[1].cmd == null && /PDF/.test(pdfPlan.steps[1].do));
   const stated = stepState(pdfPlan, pdfPlan.steps[0], { cmd: "ls -la /tmp", code: 0, stdout: "alpha\nbeta\n" }, true);
   check("state keeps next", /KEEP GOAL: list \/tmp/.test(stated) && /NEXT: Write a PDF/.test(stated) && /FACT:/.test(stated));
+  const withNote = mark(pdfPlan, "1", "ok");
+  withNote.steps[0].note = "names (2): alpha, beta";
+  const retried = stepState(withNote, withNote.steps[1], { cmd: "python3 -c open", code: 1, stdout: "" }, false, "");
+  check("listing fact survives retry", /alpha, beta/.test(retried));
+  check("workflow direct", scoreWorkflow("direct", '{"display":"hi","cmd":null}').ok === true);
+  check("workflow junk", scoreWorkflow("direct", "not json").ok === false);
   check("ok string is success", parseCheck('{"ok":"ok","why":"ok"}', "").ok === true);
   const emitted = heuristicEmit(pdfPlan.steps[1], stated);
   check("emit pdf", emitted && /tmp-summary\.pdf/.test(emitted.cmd || "") && pdfBytes("names").slice(0, 5).toString() === "%PDF-");
@@ -573,5 +633,7 @@ module.exports = {
   rollbackAfter,
   estimatePrompt,
   scoreModelReply,
+  scoreWorkflow,
+  WORKFLOW_PROBES,
   runUnitTests,
 };

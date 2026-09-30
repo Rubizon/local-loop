@@ -513,18 +513,18 @@ if (input) {
 var testBtn = document.getElementById("test");
 if (testBtn)
   testBtn.onclick = async function () {
-    const box = addMsg("bot", "Running tests…");
-    setBusy(true, "Self-test…");
+    const box = addMsg("bot", "");
+    setBusy(true, "Testing the model");
     try {
-      const unit = await (await fetch("/api/selftest")).json();
-      const lines = ["Runner " + unit.passed + "/" + unit.total + (unit.ok ? " PASS" : " FAIL")];
-      (unit.results || []).forEach(function (r) {
-        lines.push((r.ok ? "PASS" : "FAIL") + "  " + r.name);
+      const r = await fetch("/api/model-test", { method: "POST" });
+      const data = await r.json();
+      if (!r.ok && !data.checks) throw new Error(data.error || "model test failed");
+      const lines = ["Model " + (data.model || "")];
+      (data.checks || []).forEach(function (c) {
+        lines.push((c.ok ? "ok" : "not ok") + "  " + c.name + " — " + (c.detail || ""));
       });
-      const mr = await fetch("/api/model-test", { method: "POST" });
-      const model = await mr.json();
-      if (!mr.ok) lines.push("Model FAIL " + (model.error || mr.status));
-      else lines.push("Model " + model.model + " " + model.passed + "/" + model.total + (model.ok ? " PASS" : " FAIL"));
+      if (data.error && !(data.checks || []).length) lines.push(data.error);
+      lines.push(data.ok ? "Sane enough for the workflow." : "Not sane enough for the workflow.");
       box.body.textContent = lines.join("\n");
     } catch (e) {
       box.body.textContent = e.message;
