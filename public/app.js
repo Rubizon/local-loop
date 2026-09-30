@@ -55,8 +55,8 @@ function setHold(text) {
 }
 
 function retireActions() {
-  document.querySelectorAll("#chat .rowbtns button").forEach(function (b) {
-    b.disabled = true;
+  document.querySelectorAll("#chat .rowbtns").forEach(function (row) {
+    row.remove();
   });
 }
 
@@ -646,13 +646,9 @@ function renderPending(host) {
   h.className = "plan-h";
   h.textContent = "Approve the command. The model then reads the output and updates state.";
   wrap.appendChild(h);
-  const line = document.createElement("div");
-  line.className = "plan-row";
-  const k = document.createElement("span");
-  k.className = "plan-k";
-  k.textContent = "RUN";
-  line.appendChild(k);
-  line.appendChild(document.createTextNode(pendingA.cmd));
+  const line = document.createElement("pre");
+  line.className = "cmd";
+  line.textContent = pendingA.cmd;
   wrap.appendChild(line);
   host.appendChild(wrap);
   const note = document.createElement("div");
@@ -667,6 +663,8 @@ function renderPending(host) {
         const job = pendingA;
         if (!job || !job.cmd) return;
         retireActions();
+        if (h.parentNode) h.remove();
+        setHold("");
         enqueueLlm("approve:" + job.cmd, "Running", function () {
           return applyOne(job.cmd, null, host, function (result) {
             job.result = result || { cmd: job.cmd, code: 1, stdout: "", stderr: "" };
@@ -766,6 +764,7 @@ function renderPlan(host) {
       label: "Approve the scan",
       ok: true,
       fn: function () {
+        retireActions();
         enqueueLlm("scan", "Reading files", function () { return runScan(host); });
       },
     });
@@ -783,6 +782,7 @@ function renderPlan(host) {
       label: "Approve",
       ok: true,
       fn: function () {
+        retireActions();
         enqueueLlm("step:" + (step && step.id), "Working", function () { return runPlanStep(host); });
       },
     });

@@ -332,7 +332,8 @@ button.tiny {
   padding: 12px;
   max-height: 220px;
   overflow: auto;
-  white-space: pre;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
   font-family: var(--mono);
   font-size: 12.5px;
   line-height: 1.45;
