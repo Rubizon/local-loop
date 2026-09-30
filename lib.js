@@ -605,22 +605,43 @@ function endReport(plan, result, cwd) {
     if (m) add(m[1]);
   });
   const root = cwd || "";
-  const lines = ["Done."];
+  const lines = [];
   const ls = /^ls\b/.test(String((result && result.cmd) || "").trim());
   if (!paths.length && ls) {
-    const where = (String(result.cmd).match(/\s(\/\S+)\s*$/) || [])[1] || "";
-    lines.push(prettyListing(result.stdout, where));
+    const where = (String(result.cmd).match(/\s(\/\S+)\s*$/) || [])[1] || "the current directory";
+    lines.push("Here is " + where + ".");
+    lines.push("");
+    lines.push(prettyListing(result.stdout, ""));
   } else if (paths.length) {
     paths.forEach((p) => {
       const full = path.isAbsolute(p) || !root ? p : path.join(root, p);
-      lines.push((/\.pdf$/i.test(p) ? "PDF written to path: " : "Wrote path: ") + full);
+      lines.push((/\.pdf$/i.test(p) ? "The PDF is at " : "Wrote ") + full + ".");
     });
   } else {
-    const notes = steps.map((s) => String(s.note || "").trim()).filter(Boolean);
-    if (notes.length) lines.push(notes[notes.length - 1]);
+    lines.push("That’s done.");
   }
-  lines.push("Waiting for the next instruction. Clear resets.");
   return lines.join("\n");
+}
+
+function speak(opts) {
+  const result = (opts && opts.result) || {};
+  const cmd = String(result.cmd || "").trim();
+  if (!opts || !opts.ok) {
+    const why = String((opts && opts.why) || "that did not work").replace(/\.$/, "");
+    return why.charAt(0).toUpperCase() + why.slice(1) + ".";
+  }
+  if (opts.done) return endReport(opts.plan, result, opts.cwd) || "That’s done.";
+  if (/^ls\b/.test(cmd)) {
+    const where = (cmd.match(/\s(\/\S+)\s*$/) || [])[1] || "the current directory";
+    return "Listed " + where + ".";
+  }
+  const opened = cmd.match(/open\('([^']+)'/);
+  if (opened) {
+    const full = path.isAbsolute(opened[1]) || !opts.cwd ? opened[1] : path.join(opts.cwd, opened[1]);
+    return (/\.pdf$/i.test(opened[1]) ? "The PDF is at " : "Wrote ") + full + ".";
+  }
+  const step = opts.step;
+  return step && step.do ? String(step.do).replace(/\.$/, "") + "." : "Done with that step.";
 }
 
 function finishReport(plan, result) {
@@ -956,13 +977,13 @@ function runUnitTests() {
     { cmd: "python3 -c \"open('/tmp/tmp-summary.pdf','wb').write(b'')\"" },
     "/tmp/loop-x"
   );
-  check("end report pdf", ended && /PDF written to path: \/tmp\/tmp-summary\.pdf/.test(ended) && /Waiting for the next instruction/.test(ended));
+  check("end report pdf", ended && /The PDF is at \/tmp\/tmp-summary\.pdf/.test(ended) && !/Waiting/.test(ended) && !/NEXT:/.test(ended));
   const fileEnded = endReport(
     { steps: [{ status: "ok", cmd: "python3 -c \"open('foo.txt','w').write('')\"" }] },
     null,
     "/tmp/loop-x"
   );
-  check("end report file", fileEnded && /Wrote path: \/tmp\/loop-x\/foo\.txt/.test(fileEnded));
+  check("end report file", fileEnded && /Wrote \/tmp\/loop-x\/foo\.txt/.test(fileEnded));
   check("end report waits", endReport({ steps: [{ status: "todo", cmd: "ls" }] }, null, "/tmp") === null);
   const sample =
     "total 8\n" +
@@ -977,7 +998,8 @@ function runUnitTests() {
     { cmd: "ls -la /tmp", stdout: sample },
     "/tmp/loop-x"
   );
-  check("end report lists names", listedDone && /hello\.txt/.test(listedDone) && !/names \(/.test(listedDone));
+  check("end report lists names", listedDone && /Here is \/tmp/.test(listedDone) && /hello\.txt/.test(listedDone) && !/names \(/.test(listedDone) && !/Done\./.test(listedDone));
+  check("speech is not state", speak({ ok: true, done: false, result: { cmd: "ls -la /tmp", stdout: "alpha\n" }, step: { do: "List /tmp" } }) === "Listed /tmp.");
   const angry = heuristicPlan("look in my chat logs for all my angry remarks, collect them and put them into an excel and zip the excel");
   check("angry pipeline", angry && angry.steps.length === 4 && angry.steps[2].cmd == null);
   const c = heuristicCheck(p.steps[0], { cmd: "ls", code: 1, stdout: "" }, "KEEP GOAL: x");
@@ -1040,6 +1062,7 @@ module.exports = {
   shortListing,
   finishReport,
   endReport,
+  speak,
   stepState,
   pdfBytes,
   pdfCommand,

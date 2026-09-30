@@ -229,7 +229,6 @@ async function rememberOutput() {
   if (!pendingA) return;
   setBusy(true, "Reading the output");
   try {
-    const before = context.trim();
     const r = await fetch("/api/add", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -243,10 +242,6 @@ async function rememberOutput() {
     if (!r.ok) throw new Error(d.error || "state update failed");
     renderContext(d.context);
     updateBudget();
-    const kept = String(d.context || "").trim();
-    if (!kept) addMsg("bot", "Read the output. No goal yet, so state stayed empty.");
-    else if (kept === before) addMsg("bot", "Read the output. State already had what mattered.");
-    else addMsg("bot", "Read the output and updated state.");
     pendingA = null;
     setHold("");
   } finally {
@@ -414,17 +409,15 @@ async function checkpoint(result, host) {
     note("plan", planText(plan));
     renderContext(d.check.context);
     const finished = d.done || (d.plan && d.plan.steps && d.plan.steps.length && d.plan.steps.every(function (s) { return s.status === "ok"; }));
+    if (d.say) addMsg("bot", d.say);
+    else if (d.report) addMsg("bot", d.report);
     if (finished) {
       plan = null;
       check = null;
-      addMsg("bot", d.report || "Done.\nWaiting for the next instruction. Clear resets.");
       renderPlan(host);
       setHold("");
       return;
     }
-    if (d.report) addMsg("bot", d.report);
-    const nextLine = String((d.check && d.check.context) || "").split("\n").find((l) => /^NEXT:/.test(l));
-    addMsg("bot", nextLine || (d.check && d.check.ok ? "Step finished." : "Step did not pass."));
     renderPlan(host);
   } finally {
     setBusy(false);
