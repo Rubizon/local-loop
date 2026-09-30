@@ -62,6 +62,19 @@ header {
   color: var(--bg);
 }
 .status { color: var(--warn); font-size: 12px; flex: 1; }
+.live {
+  margin: 12px 16px 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  font-size: 13px;
+}
+.live.on { background: var(--acc-dim); color: var(--acc); }
+.live.wait { background: #2a2416; color: var(--warn); }
+.term button {
+  display: block;
+  margin-top: 8px;
+}
 .header-actions { display: flex; gap: 8px; }
 main {
   flex: 1;

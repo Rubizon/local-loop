@@ -10,6 +10,7 @@ const chipCwd = document.getElementById("chipCwd");
 const modesEl = document.getElementById("modes");
 
 let busy = false;
+let hold = "";
 let forced = null;
 let context = "";
 let pendingA = null;
@@ -21,10 +22,45 @@ function setText(el, v) {
   if (el) el.textContent = v;
 }
 
+function ensureLive() {
+  let bar = document.getElementById("live");
+  if (bar) return bar;
+  bar = document.createElement("div");
+  bar.id = "live";
+  bar.className = "live";
+  bar.hidden = true;
+  const thread = document.getElementById("thread");
+  const chatEl = document.getElementById("chat");
+  if (thread && chatEl) thread.insertBefore(bar, chatEl);
+  return bar;
+}
+
+function setHold(text) {
+  hold = text || "";
+  if (!busy) setBusy(false);
+}
+
 function setBusy(on, label) {
   busy = on;
   if (sendBtn) sendBtn.disabled = on;
-  setText(statusEl, on ? (label || "Waiting…") : "");
+  const bar = ensureLive();
+  if (!bar) return;
+  if (on) {
+    bar.hidden = false;
+    bar.className = "live on";
+    bar.textContent = (label || "Working") + "…";
+    setText(statusEl, (label || "Working") + "…");
+    return;
+  }
+  setText(statusEl, hold);
+  if (hold) {
+    bar.hidden = false;
+    bar.className = "live wait";
+    bar.textContent = hold;
+  } else {
+    bar.hidden = true;
+    bar.textContent = "";
+  }
 }
 
 function addMsg(role, text) {
@@ -233,21 +269,28 @@ function renderPlan(host) {
   host.appendChild(wrap);
   const step = plan.steps && plan.steps[plan.cursor];
   const finished = plan.steps && plan.steps.length && plan.steps.every(function (s) { return s.status === "ok"; });
+  const reportStep = step && !step.cmd && /report|short name|summary/i.test((step.do || "") + " " + (step.expect || ""));
   const items = [];
-  if (step && !finished) {
+  if (!finished && step) {
     items.push({
-      label: step.cmd ? "Approve step" : "Need input",
+      label: reportStep ? "Write the report" : step.cmd ? "Run " + step.cmd.split("\n")[0].slice(0, 42) : "Prepare this step",
       ok: true,
       fn: function () {
         runPlanStep(host);
       },
     });
+    setHold(reportStep
+      ? "Waiting for you. Next writes the short report in this thread. Press “Write the report”."
+      : "Waiting for you. Next: " + step.do + ".");
+  } else {
+    setHold(finished ? "Done. Nothing else is waiting." : "");
   }
   items.push({
     label: "Drop plan",
     fn: function () {
       plan = null;
       check = null;
+      setHold("");
       wrap.remove();
     },
   });
@@ -297,8 +340,20 @@ async function applyOne(cmd, stepId, host, after) {
     if (!r.ok) throw new Error(data.error || "apply failed");
     const term = document.createElement("div");
     term.className = "term";
-    term.textContent =
-      "$ " + data.result.cmd + "  exit " + data.result.code + "\n" + (data.result.stdout || "") + (data.result.stderr ? "\n" + data.result.stderr : "");
+    const text = (data.result.stdout || "") + (data.result.stderr ? "\n" + data.result.stderr : "");
+    const lines = text.split("\n");
+    const shown = lines.length > 18 ? lines.slice(0, 18).join("\n") + "\n… " + (lines.length - 18) + " more lines" : text;
+    term.textContent = "$ " + data.result.cmd + "  exit " + data.result.code + "\n" + shown;
+    if (lines.length > 18) {
+      const more = document.createElement("button");
+      more.type = "button";
+      more.textContent = "Show the full output";
+      more.onclick = function () {
+        term.textContent = "$ " + data.result.cmd + "  exit " + data.result.code + "\n" + text;
+        more.remove();
+      };
+      term.appendChild(more);
+    }
     host.appendChild(term);
     if (after) await after(data.result);
   } finally {
@@ -342,7 +397,8 @@ async function checkpoint(result, host) {
     plan = d.plan;
     check = d.check;
     renderContext(d.check.context);
-    if (d.snippet) addMsg("bot", "Kept from this step: " + d.snippet);
+    if (d.report) addMsg("bot", d.report);
+    else if (d.snippet) addMsg("bot", "Kept from this step:\n" + d.snippet);
     renderPlan(host);
   } finally {
     setBusy(false);
@@ -413,6 +469,7 @@ async function turn() {
   if (!input) return;
   const text = input.value.trim();
   if (!text || busy) return;
+  setHold("");
   input.value = "";
   paintModes();
   addMsg("user", text);

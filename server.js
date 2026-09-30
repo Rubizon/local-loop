@@ -313,6 +313,10 @@ app.post("/api/check", async (req, res) => {
       );
       check = { ...check, ...lib.parseCheck(raw, check.context) };
     } catch (_) {}
+    if (check.ok && !check.ask) {
+      const more = (plan.steps || []).some((s) => s.id !== step.id && s.status !== "ok");
+      if (more && (check.next === "done" || check.next === step.id)) check.next = "next";
+    }
     check.context = lib.finalizeRewrite(context, check.context, "");
     if (lib.overflow(context, result.stdout || "") && check.attach === "full") check.attach = "summary";
     const snippet = lib.applyAttach(check.attach, result.cmd, result);
@@ -326,8 +330,14 @@ app.post("/api/check", async (req, res) => {
       lastGoodStep = step.id;
       nextPlan = lib.advance(nextPlan, check.next);
     }
+    const report = check.ok ? lib.finishReport(nextPlan, result) : null;
+    if (report) {
+      nextPlan = report.plan;
+      const oks = (nextPlan.steps || []).filter((s) => s.status === "ok");
+      lastGoodStep = oks.length ? oks[oks.length - 1].id : lastGoodStep;
+    }
     saveContext(check.context);
-    res.json({ check, plan: nextPlan, snippet, cwd: sessionCwd });
+    res.json({ check, plan: nextPlan, snippet, report: report && report.text, cwd: sessionCwd });
   } catch (err) {
     res.status(500).json({ error: String(err.message || err) });
   }

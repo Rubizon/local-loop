@@ -26,8 +26,9 @@ const SYSTEM_PLAN = `Plan a small task tree. JSON only:
 attach = how to keep that step's output. expect = how we know the step worked.`;
 
 const SYSTEM_CHECK = `Checkpoint a plan step. JSON only:
-{"ok":true,"why":"one line","ask":null,"replan":false,"startOver":false,"next":"id or done","attach":"none|paths|summary|full","context":"full rewritten context"}
-ok if output matches expect. If output is huge, attach=summary (not full).
+{"ok":true,"why":"one line","ask":null,"replan":false,"startOver":false,"next":"next","attach":"none|paths|summary|full","context":"full rewritten context"}
+ok if output matches expect. next means the following step. done only when no step remains.
+If output is huge, attach=summary (not full).
 KEEP rules as in rewrite. startOver if the task cannot continue and files should roll back.`;
 
 const SYSTEM_EMIT = `Emit ONE command for this step, or ask. JSON only:
@@ -179,7 +180,7 @@ function parseCheck(raw, fallbackContext) {
     ask: p.ask == null || p.ask === "" ? null : String(p.ask),
     replan: p.replan === true,
     startOver: p.startOver === true,
-    next: p.next == null ? "done" : String(p.next),
+    next: p.next == null || p.next === "" ? "next" : String(p.next),
     attach: ["none", "paths", "summary", "full"].includes(String(p.attach)) ? String(p.attach) : "summary",
     context: typeof p.context === "string" ? p.context : fallbackContext,
   };
@@ -205,7 +206,10 @@ function listingNames(stdout) {
 function summarizeOutput(cmd, stdout) {
   if (/^ls\b/.test(String(cmd).trim())) {
     const names = listingNames(stdout);
-    return names.length ? "names: " + names.join(", ") : "(empty listing)";
+    if (!names.length) return "(empty listing)";
+    const shown = names.slice(0, 12);
+    const extra = names.length - shown.length;
+    return "names (" + names.length + "): " + shown.join(", ") + (extra ? ", … +" + extra : "");
   }
   if (/^(grep|rg|egrep)\b/.test(String(cmd).trim())) {
     const lines = String(stdout || "").split("\n").map((l) => l.trim()).filter(Boolean);
@@ -306,6 +310,24 @@ function heuristicCheck(step, result, context) {
   };
 }
 
+function shortListing(stdout) {
+  const names = listingNames(stdout);
+  if (!names.length) return "";
+  const shown = names.slice(0, 12);
+  const lines = ["Short name list (" + names.length + "):"].concat(shown.map((n) => "- " + n));
+  if (names.length > shown.length) lines.push("- … " + (names.length - shown.length) + " more");
+  return lines.join("\n");
+}
+
+function finishReport(plan, result) {
+  const step = currentStep(plan);
+  if (!step || step.status === "ok" || step.cmd) return null;
+  if (!/report|short name|summary/i.test(String(step.do || "") + " " + String(step.expect || ""))) return null;
+  const text = shortListing((result && result.stdout) || "");
+  if (!text) return null;
+  return { text: text, plan: advance(mark(plan, step.id, "ok"), "next") };
+}
+
 function currentStep(plan) {
   if (!plan || !plan.steps || plan.cursor < 0 || plan.cursor >= plan.steps.length) return null;
   return plan.steps[plan.cursor];
@@ -391,9 +413,14 @@ function runUnitTests() {
   check("extractJson", extractJson('{"display":"hi","cmd":null}').display === "hi");
   check("direct cmd alias", parseDirect('{"display":"ok","commands":["ls -la /tmp"]}').cmd === "ls -la /tmp");
   check("summarize ls", /aider/.test(summarizeOutput("ls -la /tmp", "total 1\ndrwx aider")));
+  const many = Array.from({ length: 20 }, (_, i) => "f" + i).join("\n");
+  check("summarize ls caps", /\+8/.test(summarizeOutput("ls /tmp", many)) && summarizeOutput("ls /tmp", many).length < 200);
   check("deny sudo", (() => { try { assertSafeCmd("sudo ls"); return false; } catch (_) { return true; } })());
   const p = heuristicPlan("list /tmp then write a report");
   check("heuristic plan", p && p.steps.length === 2);
+  const listed = advance(mark(p, "1", "ok"), "next");
+  const finished = finishReport(listed, { cmd: "ls -la /tmp", code: 0, stdout: "alpha\nbeta\n" });
+  check("report finishes", finished && /alpha/.test(finished.text) && finished.plan.steps[1].status === "ok");
   const angry = heuristicPlan("look in my chat logs for all my angry remarks, collect them and put them into an excel and zip the excel");
   check("angry pipeline", angry && angry.steps.length === 4 && angry.steps[2].cmd == null);
   const c = heuristicCheck(p.steps[0], { cmd: "ls", code: 1, stdout: "" }, "KEEP GOAL: x");
@@ -429,6 +456,8 @@ module.exports = {
   parseEmit,
   listingNames,
   summarizeOutput,
+  shortListing,
+  finishReport,
   overflow,
   applyAttach,
   heuristicDirect,
