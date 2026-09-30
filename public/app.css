@@ -68,7 +68,8 @@ main {
 .msg { position: relative; margin: 0 0 16px; max-width: 100%; min-width: 0; }
 .reason, .term, .codebox, .composer, aside { position: relative; }
 button.icon-copy,
-button.icon-format {
+button.icon-format,
+aside > button.icon-lock {
   position: absolute;
   top: 4px;
   right: 4px;
@@ -87,7 +88,8 @@ button.icon-format {
   pointer-events: none;
   transition: opacity .12s ease .35s;
 }
-button.icon-format { right: 36px; }
+button.icon-format,
+aside > button.icon-lock { right: 36px; }
 .msg:hover > button.icon-copy,
 .msg:focus-within > button.icon-copy,
 .msg .body:hover > button.icon-copy,
@@ -106,16 +108,21 @@ button.icon-format { right: 36px; }
 .composer:focus-within > button.icon-copy,
 aside:hover > button.icon-copy,
 aside:focus-within > button.icon-copy,
+aside:hover > button.icon-lock,
+aside:focus-within > button.icon-lock,
 button.icon-copy:hover,
 button.icon-copy:focus,
 button.icon-format:hover,
-button.icon-format:focus {
+button.icon-format:focus,
+button.icon-lock:hover,
+button.icon-lock:focus {
   opacity: 1;
   pointer-events: auto;
   transition-delay: 0s;
 }
 button.icon-copy.done,
-button.icon-format.on { color: #fff; background: #3a3a3a; }
+button.icon-format.on,
+button.icon-lock.open { color: #fff; background: #3a3a3a; }
 .msg.user > button.icon-copy { top: 6px; right: 6px; left: auto; }
 .term > button.icon-copy,
 .codebox > button.icon-copy { top: 6px; right: 6px; }
@@ -389,18 +396,7 @@ aside h2 { margin: 0; font-size: 14px; font-weight: 600; }
   overflow-x: auto;
   min-height: 80px;
 }
-button.icon-lock {
-  width: 26px;
-  height: 26px;
-  margin: 0;
-  padding: 0;
-  display: grid;
-  place-items: center;
-  border-radius: 8px;
-  background: transparent;
-  color: #a1a1aa;
-}
-button.icon-lock.open { color: #fff; background: #2a2a2a; }
+#ctx.empty { color: var(--muted); }
 #ctxEdit {
   display: block;
   width: 100%;
