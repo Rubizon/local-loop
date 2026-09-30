@@ -277,6 +277,7 @@ function dress(box, raw) {
   bar.className = "viewbar";
   const status = document.createElement("span");
   status.className = "status";
+  status.hidden = true;
   const dots = document.createElement("span");
   dots.className = "dots";
   dots.appendChild(document.createElement("i"));
@@ -287,57 +288,64 @@ function dress(box, raw) {
   const toggle = document.createElement("button");
   toggle.type = "button";
   toggle.className = "tiny ghost";
-  toggle.textContent = "Raw";
-  toggle.hidden = true;
-  bar.appendChild(status);
-  bar.appendChild(toggle);
+  toggle.textContent = "Format";
   const native = document.createElement("pre");
   native.className = "native";
   native.textContent = text;
   const read = document.createElement("div");
   read.className = "read";
   read.hidden = true;
+  bar.appendChild(status);
+  bar.appendChild(toggle);
   body.appendChild(bar);
   body.appendChild(native);
   body.appendChild(read);
   const small = window.LoopFormat && LoopFormat.canFormat && LoopFormat.canFormat(text);
   if (!small) {
-    status.hidden = true;
+    bar.hidden = true;
     note("format", "left raw (" + text.length + " chars)");
     return;
   }
-  let showRaw = false;
+  let showRaw = true;
   function paint() {
     read.hidden = showRaw;
     native.hidden = !showRaw;
-    toggle.textContent = showRaw ? "Formatted" : "Raw";
+    toggle.textContent = showRaw ? "Format" : "Raw";
   }
-  toggle.onclick = function () {
-    showRaw = !showRaw;
-    paint();
-  };
-  fetch("/api/markup", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ text: text }),
-  })
-    .then(function (r) { return r.json(); })
-    .then(function (data) {
-      var modelText = String((data && data.pretty) || text);
-      var pretty = window.LoopFormat && LoopFormat.formatAnswer ? LoopFormat.formatAnswer(modelText) : modelText;
-      if (pretty.trim() && pretty.trim() !== text.trim()) {
+  toggle.onclick = function (ev) {
+    ev.stopPropagation();
+    if (!showRaw) {
+      showRaw = true;
+      paint();
+      return;
+    }
+    status.hidden = false;
+    toggle.disabled = true;
+    fetch("/api/markup", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text: text }),
+    })
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        var modelText = String((data && data.pretty) || text);
+        var pretty = window.LoopFormat && LoopFormat.formatAnswer ? LoopFormat.formatAnswer(modelText) : modelText;
+        if (!pretty.trim() || pretty.trim() === text.trim()) return;
         renderMarkdown(pretty, read);
-        toggle.hidden = false;
         showRaw = false;
         paint();
-      }
-      note("format", "source:\n" + text + "\n\nshown:\n" + pretty);
-      status.hidden = true;
-    })
-    .catch(function (err) {
-      note("format", "markup failed: " + (err && err.message ? err.message : "error") + "\n\nsource:\n" + text);
-      status.hidden = true;
-    });
+        note("format", "source:\n" + text + "\n\nshown:\n" + pretty);
+      })
+      .catch(function (err) {
+        note("format", "markup failed: " + (err && err.message ? err.message : "error"));
+      })
+      .then(function () {
+        status.hidden = true;
+        toggle.disabled = false;
+        var pre = box.div && box.div.querySelector(".reason-body");
+        if (pre && pre.dataset.formatted !== "1") pre.textContent = pre.dataset.raw || "(none)";
+      });
+  };
 }
 
 function addMsg(role, text, quiet) {
@@ -397,10 +405,14 @@ function showReason(box, text) {
   fmt.textContent = "Format";
   const pre = document.createElement("pre");
   pre.className = "reason-body";
+  pre.dataset.raw = raw;
+  pre.dataset.formatted = "0";
   pre.textContent = raw || "(none)";
   let formatted = false;
-  fmt.onclick = function () {
+  fmt.onclick = function (ev) {
+    ev.stopPropagation();
     formatted = !formatted;
+    pre.dataset.formatted = formatted ? "1" : "0";
     if (!formatted || !window.LoopFormat) {
       pre.textContent = raw || "(none)";
       fmt.textContent = "Format";
@@ -411,7 +423,8 @@ function showReason(box, text) {
     fmt.textContent = "Plain";
     note("format", "reasoning formatted\n\n" + pre.textContent);
   };
-  k.onclick = function () {
+  k.onclick = function (ev) {
+    ev.stopPropagation();
     const open = panel.hidden;
     panel.hidden = !open;
     el.classList.toggle("open", open);
