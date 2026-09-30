@@ -51,7 +51,8 @@ cmd is shown with an Approve button. It has not run. Do not describe output you 
 cmd is null for arithmetic, or for a program they asked to see. Put that program in display. Use \\n between lines.
 The clock, the user, the host, and the files are on this PC. A question about them is a command that prints the fact. Do not say you lack access.
 cmd is the command when they asked for a command. Use the language they named.
-cmd prints a path when they named one and want it read, listed, or reported. Copy their path. display is one sentence. You have not seen it yet. Do not refuse. Do not say you cannot access it.`;
+cmd prints a path when they named one and want it read, listed, or reported. Copy their path. display is one sentence. You have not seen it yet. Do not refuse. Do not say you cannot access it.
+Never say the work is already done. Tomorrow's date or time is a date command.`;
 
 const SYSTEM_SAY = `Report the command output. JSON only. The first character is {.
 {"say":"plain sentences about what the output shows"}
@@ -1334,8 +1335,10 @@ function diagnoseReply(kind, raw) {
   }
   if (kind === "think") {
     const reason = typeof parsed.reason === "string" ? parsed.reason.trim() : "";
+    const display = typeof parsed.display === "string" ? parsed.display.trim() : "";
     const cmd = typeof parsed.cmd === "string" ? parsed.cmd.trim() : "";
     if (!reason) return "JSON has no reason. Keys: " + keys;
+    if (/I have (read|reported|listed)|already (read|listed)/i.test(display + " " + reason)) return "claimed the work is already done. Reason: " + clip(reason, 80);
     if (!cmd) return "reason but no command. It did not decide to read the file. Reason: " + clip(reason, 80);
     if (!/lib\.js/.test(cmd)) return "command does not read lib.js: " + clip(cmd, 70);
     return "reason and a read command";
@@ -1374,7 +1377,10 @@ function diagnoseReply(kind, raw) {
     const display = typeof parsed.display === "string" ? parsed.display.trim() : "";
     const cmd = typeof parsed.cmd === "string" ? parsed.cmd.trim() : "";
     if (!reason) return "JSON has no reason. Keys: " + keys;
-    if (!cmd && !/python/.test(display)) return "reason but no python command. Reason: " + clip(reason, 80);
+    if (!cmd || !/python/.test(cmd)) {
+      if (/^import |os\.|def /.test(display)) return "python is in the bubble, not in cmd. Reason: " + clip(reason, 80);
+      return "reason but no python command. Reason: " + clip(reason, 80);
+    }
     if (display.startsWith("{")) return "display is raw JSON";
     return "python command with a reason";
   }
@@ -1385,6 +1391,24 @@ function diagnoseReply(kind, raw) {
     if (!display || /:\s*$/.test(display)) return "introduction only, the program is missing";
     if (!/#include|printf|puts/.test(display)) return "answer has no C program. Starts: " + clip(display, 80);
     return "shows the program";
+  }
+  if (kind === "clock" || kind === "weekday") {
+    const reason = typeof parsed.reason === "string" ? parsed.reason.trim() : "";
+    const display = typeof parsed.display === "string" ? parsed.display.trim() : "";
+    const cmd = typeof parsed.cmd === "string" ? parsed.cmd.trim() : "";
+    if (/cannot|can't|lack access|not available|real-time|do not have|don't have/i.test(display + " " + reason)) return "refused the clock";
+    if (!cmd || !/\bdate\b/.test(cmd)) return "no date command. Reason: " + clip(reason || display, 80);
+    return "asks the clock";
+  }
+  if (kind === "host" || kind === "who" || kind === "cwd" || kind === "disk" || kind === "listing") {
+    const reason = typeof parsed.reason === "string" ? parsed.reason.trim() : "";
+    const display = typeof parsed.display === "string" ? parsed.display.trim() : "";
+    const cmd = typeof parsed.cmd === "string" ? parsed.cmd.trim() : "";
+    if (/cannot|can't|lack access|not available|real-time/i.test(display + " " + reason)) return "refused the machine";
+    const want = kind === "host" ? /hostname|uname/ : kind === "who" ? /whoami|id\b/ : kind === "cwd" ? /\bpwd\b/ : kind === "disk" ? /\bdf\b/ : /\bls\b/;
+    if (!cmd || !want.test(cmd)) return "no machine command. Reason: " + clip(reason || display, 80);
+    if (display.length >= 200) return "answer is too long for a command that has not run";
+    return "asks the machine";
   }
   return "unknown probe";
 }
@@ -1494,9 +1518,28 @@ function scoreWorkflow(kind, raw) {
   } else if (kind === "think") {
     name = "Think";
     const reason = typeof parsed.reason === "string" && parsed.reason.trim();
+    const display = typeof parsed.display === "string" ? parsed.display.trim() : "";
     const cmd = typeof parsed.cmd === "string" ? parsed.cmd.trim() : "";
-    ok = !!(reason && cmd && /lib\.js/.test(cmd));
+    const pretended = /I have (read|reported|listed)|already (read|listed)/i.test(display);
+    ok = !!(reason && cmd && /lib\.js/.test(cmd) && !pretended);
     detail = ok ? "decides to read the file" : diagnosis;
+  } else if (kind === "clock" || kind === "weekday") {
+    name = kind === "weekday" ? "Weekday" : "Clock";
+    const display = typeof parsed.display === "string" ? parsed.display.trim() : "";
+    const reason = typeof parsed.reason === "string" ? parsed.reason.trim() : "";
+    const cmd = typeof parsed.cmd === "string" ? parsed.cmd.trim() : "";
+    const refused = /cannot|can't|lack access|not available|real-time|do not have|don't have/i.test(display + " " + reason);
+    ok = !!(reason && cmd && /\bdate\b/.test(cmd) && !refused);
+    detail = ok ? "asks the clock" : diagnosis;
+  } else if (kind === "host" || kind === "who" || kind === "cwd" || kind === "disk" || kind === "listing") {
+    name = kind;
+    const display = typeof parsed.display === "string" ? parsed.display.trim() : "";
+    const reason = typeof parsed.reason === "string" ? parsed.reason.trim() : "";
+    const cmd = typeof parsed.cmd === "string" ? parsed.cmd.trim() : "";
+    const refused = /cannot|can't|lack access|not available|real-time/i.test(display + " " + reason);
+    const want = kind === "host" ? /hostname|uname/ : kind === "who" ? /whoami|id\b/ : kind === "cwd" ? /\bpwd\b/ : kind === "disk" ? /\bdf\b/ : /\bls\b/;
+    ok = !!(reason && cmd && want.test(cmd) && !refused && display.length < 200);
+    detail = ok ? "asks the machine" : diagnosis;
   } else if (kind === "ask") {
     name = "Ask";
     const display = typeof parsed.display === "string" && parsed.display.trim();
@@ -1524,8 +1567,7 @@ function scoreWorkflow(kind, raw) {
     const reason = typeof parsed.reason === "string" && parsed.reason.trim();
     const display = typeof parsed.display === "string" ? parsed.display.trim() : "";
     const cmd = typeof parsed.cmd === "string" ? parsed.cmd.trim() : "";
-    const body = cmd || display;
-    ok = !!(reason && /python/.test(body) && !display.startsWith("{"));
+    ok = !!(reason && /python/.test(cmd) && !display.startsWith("{"));
     detail = ok ? "python command" : diagnosis;
   } else if (kind === "code") {
     name = "Code";
@@ -1595,6 +1637,48 @@ const WORKFLOW_PROBES = [
     system: SYSTEM_THINK,
     user: "User: write a simple C program that prints hello world\nThe first character of your reply is {.",
     predict: 400,
+  },
+  {
+    kind: "clock",
+    system: SYSTEM_THINK,
+    user: "User: what time is it tomorrow?\nThe first character of your reply is {.",
+    predict: 160,
+  },
+  {
+    kind: "weekday",
+    system: SYSTEM_THINK,
+    user: "User: what day is it tomorrow?\nThe first character of your reply is {.",
+    predict: 160,
+  },
+  {
+    kind: "host",
+    system: SYSTEM_THINK,
+    user: "User: what is the hostname of this PC?\nThe first character of your reply is {.",
+    predict: 140,
+  },
+  {
+    kind: "who",
+    system: SYSTEM_THINK,
+    user: "User: who is logged in on this PC?\nThe first character of your reply is {.",
+    predict: 140,
+  },
+  {
+    kind: "cwd",
+    system: SYSTEM_THINK,
+    user: "User: what directory am I in right now?\nThe first character of your reply is {.",
+    predict: 140,
+  },
+  {
+    kind: "disk",
+    system: SYSTEM_THINK,
+    user: "User: how much disk space is free?\nThe first character of your reply is {.",
+    predict: 140,
+  },
+  {
+    kind: "listing",
+    system: SYSTEM_THINK,
+    user: "User: list the files in /tmp\nThe first character of your reply is {.",
+    predict: 160,
   },
 ];
 
@@ -1742,6 +1826,27 @@ const USER_SCENARIOS = [
       return !!(t.cmd && !/lib\.js/.test(t.cmd) && !copiedFromPrompt("display information about this os", t) && /uname|os-release|hostnamectl|lsb_release/.test(t.cmd));
     },
   },
+  { name: "tomorrow time", system: SYSTEM_THINK, user: "User: what time is it tomorrow?\nThe first character of your reply is {.", predict: 160, fixture: '{"reason":"The clock is on this PC.","display":"I will ask the clock.","cmd":"date -d tomorrow"}', pass: (raw) => { const t = parseThink(raw, ""); return !!(t.cmd && /\bdate\b/.test(t.cmd) && !/cannot|lack access|real-time/i.test(t.display)); } },
+  { name: "tomorrow day", system: SYSTEM_THINK, user: "User: what day is it tomorrow?\nThe first character of your reply is {.", predict: 160, fixture: '{"reason":"Need the next weekday from the clock.","display":"I will ask the clock.","cmd":"date -d tomorrow +%A"}', pass: (raw) => { const t = parseThink(raw, ""); return !!(t.cmd && /\bdate\b/.test(t.cmd) && !/cannot|lack access|real-time/i.test(t.display)); } },
+  { name: "hostname", system: SYSTEM_THINK, user: "User: what is the hostname of this PC?\nThe first character of your reply is {.", predict: 140, fixture: '{"reason":"The name is on this PC.","display":"I will ask the host.","cmd":"hostname"}', pass: (raw) => { const t = parseThink(raw, ""); return !!(t.cmd && /hostname|uname/.test(t.cmd)); } },
+  { name: "whoami", system: SYSTEM_THINK, user: "User: who is logged in on this PC?\nThe first character of your reply is {.", predict: 140, fixture: '{"reason":"The user is on this PC.","display":"I will ask who.","cmd":"whoami"}', pass: (raw) => { const t = parseThink(raw, ""); return !!(t.cmd && /whoami|id\b/.test(t.cmd)); } },
+  { name: "current directory", system: SYSTEM_THINK, user: "User: what directory am I in right now?\nThe first character of your reply is {.", predict: 140, fixture: '{"reason":"The shell knows the directory.","display":"I will print it.","cmd":"pwd"}', pass: (raw) => { const t = parseThink(raw, ""); return !!(t.cmd && /\bpwd\b/.test(t.cmd)); } },
+  { name: "disk free", system: SYSTEM_THINK, user: "User: how much disk space is free?\nThe first character of your reply is {.", predict: 140, fixture: '{"reason":"Disk space is on this PC.","display":"I will ask df.","cmd":"df -h"}', pass: (raw) => { const t = parseThink(raw, ""); return !!(t.cmd && /\bdf\b/.test(t.cmd)); } },
+  { name: "uptime", system: SYSTEM_THINK, user: "User: how long has this PC been up?\nThe first character of your reply is {.", predict: 140, fixture: '{"reason":"Uptime is on this PC.","display":"I will ask uptime.","cmd":"uptime"}', pass: (raw) => { const t = parseThink(raw, ""); return !!(t.cmd && /\buptime\b/.test(t.cmd)); } },
+  { name: "list /var/log", system: SYSTEM_THINK, user: "User: list the files in /var/log\nThe first character of your reply is {.", predict: 160, fixture: '{"reason":"The directory has not been listed.","display":"I will list it.","cmd":"ls -la /var/log"}', pass: (raw) => { const t = parseThink(raw, ""); return !!(t.cmd && /\bls\b/.test(t.cmd) && /\/var\/log/.test(t.cmd) && t.display.length < 200); } },
+  { name: "read notes", system: SYSTEM_THINK, user: "User: read /tmp/notes.txt and report it.\nThe first character of your reply is {.", predict: 160, fixture: '{"reason":"The file has not been read.","display":"I will read it.","cmd":"sed -n \'1,80p\' /tmp/notes.txt"}', pass: (raw) => { const t = parseThink(raw, ""); return !!(t.cmd && /notes\.txt/.test(t.cmd) && !/I have read/i.test(t.display)); } },
+  { name: "head notes", system: SYSTEM_THINK, user: "User: show the first 20 lines of /tmp/notes.txt\nThe first character of your reply is {.", predict: 160, fixture: '{"reason":"Only the start is needed.","display":"I will show the start.","cmd":"head -n 20 /tmp/notes.txt"}', pass: (raw) => { const t = parseThink(raw, ""); return !!(t.cmd && /notes\.txt/.test(t.cmd)); } },
+  { name: "wc notes", system: SYSTEM_THINK, user: "User: how many words are in /tmp/notes.txt?\nThe first character of your reply is {.", predict: 140, fixture: '{"reason":"Need a count.","display":"I will count the words.","cmd":"wc -w /tmp/notes.txt"}', pass: (raw) => { const t = parseThink(raw, ""); return !!(t.cmd && /notes\.txt/.test(t.cmd) && /wc/.test(t.cmd)); } },
+  { name: "find pdfs", system: SYSTEM_THINK, user: "User: find every pdf under /tmp/docs\nThe first character of your reply is {.", predict: 160, fixture: '{"reason":"The tree has not been searched.","display":"I will find the pdf files.","cmd":"find /tmp/docs -name \'*.pdf\'"}', pass: (raw) => { const t = parseThink(raw, ""); return !!(t.cmd && /pdf/.test(t.cmd) && /find|ls/.test(t.cmd)); } },
+  { name: "memory", system: SYSTEM_THINK, user: "User: how much memory is free?\nThe first character of your reply is {.", predict: 140, fixture: '{"reason":"Memory is on this PC.","display":"I will ask free.","cmd":"free -h"}', pass: (raw) => { const t = parseThink(raw, ""); return !!(t.cmd && /\bfree\b/.test(t.cmd)); } },
+  { name: "kernel", system: SYSTEM_THINK, user: "User: what kernel is this PC running?\nThe first character of your reply is {.", predict: 140, fixture: '{"reason":"The kernel is on this PC.","display":"I will ask uname.","cmd":"uname -r"}', pass: (raw) => { const t = parseThink(raw, ""); return !!(t.cmd && /uname/.test(t.cmd)); } },
+  { name: "python concat command", system: SYSTEM_THINK, user: "User: write a short python command to concatenate all files in a directory.\nPut that command in cmd.\nThe first character of your reply is {.", predict: 220, fixture: '{"reason":"The files have not been joined.","display":"I will run Python.","cmd":"python3 -c \\"print(1)\\""}', pass: (raw) => { const t = parseThink(raw, ""); return !!(t.cmd && /python/.test(t.cmd)); } },
+  { name: "do not pretend", system: SYSTEM_THINK, user: "User: read /tmp/plain.txt and report it.\nThe first character of your reply is {.", predict: 160, fixture: '{"reason":"The file has not been read.","display":"I will read it first.","cmd":"cat /tmp/plain.txt"}', pass: (raw) => { const t = parseThink(raw, ""); return !!(t.cmd && /plain\.txt/.test(t.cmd) && !/I have (read|reported)/i.test(t.display)); } },
+  { name: "ip address", system: SYSTEM_THINK, user: "User: what is this PC's IP address?\nThe first character of your reply is {.", predict: 160, fixture: '{"reason":"The address is on this PC.","display":"I will ask the network.","cmd":"hostname -I"}', pass: (raw) => { const t = parseThink(raw, ""); return !!(t.cmd && /hostname|ip /.test(t.cmd)); } },
+  { name: "process list", system: SYSTEM_THINK, user: "User: which processes are running?\nThe first character of your reply is {.", predict: 140, fixture: '{"reason":"The process list is on this PC.","display":"I will list processes.","cmd":"ps aux"}', pass: (raw) => { const t = parseThink(raw, ""); return !!(t.cmd && /\bps\b/.test(t.cmd)); } },
+  { name: "env home", system: SYSTEM_THINK, user: "User: what is the home directory on this PC?\nThe first character of your reply is {.", predict: 140, fixture: '{"reason":"HOME is on this PC.","display":"I will print HOME.","cmd":"printenv HOME"}', pass: (raw) => { const t = parseThink(raw, ""); return !!(t.cmd && /HOME|echo/.test(t.cmd)); } },
+  { name: "calendar", system: SYSTEM_THINK, user: "User: show this month's calendar.\nThe first character of your reply is {.", predict: 140, fixture: '{"reason":"The calendar is on this PC.","display":"I will print the month.","cmd":"cal"}', pass: (raw) => { const t = parseThink(raw, ""); return !!(t.cmd && /\bcal\b/.test(t.cmd)); } },
+  { name: "file type", system: SYSTEM_THINK, user: "User: what kind of file is /tmp/notes.txt?\nThe first character of your reply is {.", predict: 140, fixture: '{"reason":"The type has not been checked.","display":"I will ask file.","cmd":"file /tmp/notes.txt"}', pass: (raw) => { const t = parseThink(raw, ""); return !!(t.cmd && /\bfile\b/.test(t.cmd) && /notes\.txt/.test(t.cmd)); } },
 ];
 
 function runUnitTests() {
@@ -1832,6 +1937,12 @@ function runUnitTests() {
   check("workflow direct", scoreWorkflow("direct", '{"display":"hi","cmd":null}').ok === true);
   check("workflow junk", scoreWorkflow("direct", "not json").ok === false);
   check("workflow think reads", scoreWorkflow("think", '{"reason":"The file has not been read.","display":"I will read it first.","cmd":"sed -n \'1,80p\' /tmp/lib.js"}').ok === true);
+  check("workflow think pretends", scoreWorkflow("think", '{"reason":"The request is to read it.","display":"I have read and reported the content of /tmp/lib.js.","cmd":null}').ok === false);
+  check("workflow clock", scoreWorkflow("clock", '{"reason":"The clock is on this PC.","display":"I will ask the clock.","cmd":"date -d tomorrow"}').ok === true);
+  check("workflow clock refuses", scoreWorkflow("clock", '{"reason":"no access","display":"I cannot determine the time because real-time access is not available.","cmd":null}').ok === false);
+  check("workflow host", scoreWorkflow("host", '{"reason":"The name is on this PC.","display":"I will ask.","cmd":"hostname"}').ok === true);
+  check("workflow listing short", scoreWorkflow("listing", '{"reason":"Not listed yet.","display":"I will list /tmp.","cmd":"ls -la /tmp"}').ok === true);
+  check("workflow concat script stays a failure", scoreWorkflow("concat", '{"reason":"Join the files.","display":"import os\\nprint(1)","cmd":null}').ok === false);
   check("workflow think echo fails", scoreWorkflow("think", '{"reason":"ok","display":"/tmp/lib.js","cmd":null}').ok === false);
   check("workflow ask stays quiet", scoreWorkflow("ask", '{"reason":"No command is needed.","display":"4","cmd":null}').ok === true);
   check("workflow ask no command", scoreWorkflow("ask", '{"reason":"I will list it.","display":"ok","cmd":"ls /tmp"}').ok === false);
@@ -1850,7 +1961,7 @@ function runUnitTests() {
   check("program stays in the answer", shown && !shown.cmd && !shown.plan && /puts/.test(shown.display) && shown.display.includes("\n"));
   const lifted = parseThink('{"reason":"search","display":"grep \\"error\\" /tmp/app.log\\nor\\nrg error /tmp/app.log","cmd":null}', "find error");
   check("command in the answer is runnable", lifted.cmd && /^grep /.test(lifted.cmd) && /app\.log/.test(lifted.cmd));
-  check("prompt has no sample file", !/lib\.js/.test(SYSTEM_THINK) && !/sed -n/.test(SYSTEM_THINK) && /Reasoning line/.test(SYSTEM_THINK) && /Approve/.test(SYSTEM_THINK) && /Format/.test(SYSTEM_THINK) && /clock/.test(SYSTEM_THINK));
+  check("prompt has no sample file", !/lib\.js/.test(SYSTEM_THINK) && !/sed -n/.test(SYSTEM_THINK) && /Reasoning line/.test(SYSTEM_THINK) && /Approve/.test(SYSTEM_THINK) && /already done/.test(SYSTEM_THINK));
   check("markup knows it is format", /pressed Format/.test(SYSTEM_MARKUP) && /Do not invent files/.test(SYSTEM_MARKUP));
   check("copied sample is rejected", copiedFromPrompt("display information about this os", { reason: "I have not read the file the user named, so I cannot summarize it yet.", display: "I'll read the whole file.", cmd: "cat /tmp/lib.js" }));
   check("intro is not the answer", thinAnswer({ display: "Here is a simple C program that prints 'hello world':", cmd: null, plan: null }));
