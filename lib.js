@@ -657,6 +657,13 @@ function looseBrace(raw) {
   return inner;
 }
 
+function shellish(cmd) {
+  const text = String(cmd || "").trim();
+  if (!text || text.length > 160) return false;
+  if (/^(the|this|a|an|i)\b/i.test(text)) return false;
+  return text.split(/\s+/).length <= 16;
+}
+
 function repairReply(kind, raw, userText) {
   const thinkKinds = { think: 1, ask: 1, concat: 1, code: 1, clock: 1, weekday: 1, host: 1, who: 1, cwd: 1, disk: 1, listing: 1 };
   if (!thinkKinds[kind]) return String(raw || "");
@@ -681,7 +688,7 @@ function repairReply(kind, raw, userText) {
   let reason = !parsed._raw && typeof parsed.reason === "string" ? parsed.reason.trim() : "";
   let display = !parsed._raw && typeof parsed.display === "string" ? parsed.display.trim() : "";
   let cmd = !parsed._raw && typeof parsed.cmd === "string" ? parsed.cmd.trim() : "";
-  if (cmd === "null") cmd = "";
+  if (cmd === "null" || !shellish(cmd)) cmd = "";
   const blob = reason + " " + display + " " + (parsed._raw ? source : "");
   const refused = /cannot|can't|lack access|not available|real-time|do not have|don't have|unable/i.test(blob);
   const pretended = /I have (read|reported|listed)|already (read|listed)/i.test(blob);
@@ -1640,7 +1647,7 @@ function diagnoseReply(kind, raw) {
     const display = typeof parsed.display === "string" ? parsed.display.trim() : "";
     const cmd = typeof parsed.cmd === "string" ? parsed.cmd.trim() : "";
     if (/cannot|can't|lack access|not available|real-time/i.test(display + " " + reason)) return "refused the machine";
-    const want = kind === "host" ? /hostname|uname/ : kind === "who" ? /whoami|id\b/ : kind === "cwd" ? /\bpwd\b/ : kind === "disk" ? /\bdf\b/ : /\bls\b/;
+    const want = kind === "host" ? /hostname|uname/ : kind === "who" ? /\bwho(?:ami)?\b|\bid\b/ : kind === "cwd" ? /\bpwd\b/ : kind === "disk" ? /\bdf\b/ : /\bls\b/;
     if (!cmd || !want.test(cmd)) return "no machine command. Reason: " + clip(reason || display, 80);
     if (display.length >= 200) return "answer is too long for a command that has not run";
     return "asks the machine";
@@ -1772,7 +1779,7 @@ function scoreWorkflow(kind, raw) {
     const reason = typeof parsed.reason === "string" ? parsed.reason.trim() : "";
     const cmd = typeof parsed.cmd === "string" ? parsed.cmd.trim() : "";
     const refused = /cannot|can't|lack access|not available|real-time/i.test(display + " " + reason);
-    const want = kind === "host" ? /hostname|uname/ : kind === "who" ? /whoami|id\b/ : kind === "cwd" ? /\bpwd\b/ : kind === "disk" ? /\bdf\b/ : /\bls\b/;
+    const want = kind === "host" ? /hostname|uname/ : kind === "who" ? /\bwho(?:ami)?\b|\bid\b/ : kind === "cwd" ? /\bpwd\b/ : kind === "disk" ? /\bdf\b/ : /\bls\b/;
     ok = !!(reason && cmd && want.test(cmd) && !refused && display.length < 200);
     detail = ok ? "asks the machine" : diagnosis;
   } else if (kind === "ask") {
@@ -2208,6 +2215,8 @@ function runUnitTests() {
   check("repair leaves arithmetic", repairReply("ask", '{"reason":"2 plus 2 equals 4","display":"4","cmd":null}', "User: what is 2+2").includes('"cmd":null') || /"cmd":null/.test(repairReply("ask", '{"reason":"2 plus 2 equals 4","display":"4","cmd":null}', "User: what is 2+2")));
   check("repair host", scoreWorkflow("host", repairReply("host", '{"reason":"Run hostname.","display":"I will ask.","cmd":null}', "User: what is the hostname of this PC?")).ok === true);
   check("repair who", scoreWorkflow("who", repairReply("who", '{"reason":"whoami","display":"I will ask.","cmd":null}', "User: who is logged in on this PC?")).ok === true);
+  check("who command counts", scoreWorkflow("who", repairReply("who", '{"reason":"The who command lists the users.","display":"I will ask who.","cmd":"who"}', "User: who is logged in on this PC?")).ok === true);
+  check("prose is not a who command", scoreWorkflow("who", repairReply("who", '{"reason":"The who command lists the users.","display":"I will ask.","cmd":"The who command is used to determine who is currently logged in on a Linux system."}', "User: who is logged in on this PC?")).ok === true);
   check("repair cwd", scoreWorkflow("cwd", repairReply("cwd", '{"reason":"pwd","display":"I will ask.","cmd":null}', "User: what directory am I in right now?")).ok === true);
   check("repair disk", scoreWorkflow("disk", repairReply("disk", '{"reason":"df","display":"I will ask.","cmd":null}', "User: how much disk space is free?")).ok === true);
   check("repair clock refusal in the reason", scoreWorkflow("clock", repairReply("clock", '{"reason":"I cannot determine the time. Real-time access is not available.","display":"No.","cmd":"date"}', "User: what time is it tomorrow?\nThe first character of your reply is {.")).ok === true);
