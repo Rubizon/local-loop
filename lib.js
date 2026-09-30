@@ -45,7 +45,8 @@ Keep finished work. 1-5 remaining steps. Do not repeat done steps.`;
 const SYSTEM_THINK = `You are on the user's computer. They want something done there. One JSON object. The first character is {.
 {"reason":"one sentence","display":"the answer","cmd":null}
 Do not copy the example.
-cmd is null when they asked a question, or when they asked to see a program. Put that program in display. Use \\n between lines.
+cmd is null for arithmetic, or for a program they asked to see. Put that program in display. Use \\n between lines.
+You are on their PC. The clock, the user, the host, and the files are on that machine. A question about them is answered by a command that prints the fact. Do not say you lack access.
 cmd is the command when they asked for a command. Use the language they named.
 cmd prints a path when they named one and want it read, listed, or reported. Copy their path. display is one sentence. You have not seen it yet. Do not refuse. Do not say you cannot access it.`;
 
@@ -1845,7 +1846,7 @@ function runUnitTests() {
   check("program stays in the answer", shown && !shown.cmd && !shown.plan && /puts/.test(shown.display) && shown.display.includes("\n"));
   const lifted = parseThink('{"reason":"search","display":"grep \\"error\\" /tmp/app.log\\nor\\nrg error /tmp/app.log","cmd":null}', "find error");
   check("command in the answer is runnable", lifted.cmd && /^grep /.test(lifted.cmd) && /app\.log/.test(lifted.cmd));
-  check("prompt has no sample file", !/lib\.js/.test(SYSTEM_THINK) && !/sed -n/.test(SYSTEM_THINK) && /user's computer/.test(SYSTEM_THINK) && /Do not refuse/.test(SYSTEM_THINK) && /language they named/.test(SYSTEM_THINK));
+  check("prompt has no sample file", !/lib\.js/.test(SYSTEM_THINK) && !/sed -n/.test(SYSTEM_THINK) && /user's computer/.test(SYSTEM_THINK) && /Do not refuse/.test(SYSTEM_THINK) && /clock/.test(SYSTEM_THINK));
   check("copied sample is rejected", copiedFromPrompt("display information about this os", { reason: "I have not read the file the user named, so I cannot summarize it yet.", display: "I'll read the whole file.", cmd: "cat /tmp/lib.js" }));
   check("intro is not the answer", thinAnswer({ display: "Here is a simple C program that prints 'hello world':", cmd: null, plan: null }));
   check("markup keeps the words", presentMarkup("prints hello", "```md\n- prints hello\n```") === "- prints hello");
