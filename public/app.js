@@ -1,5 +1,6 @@
 const chat = document.getElementById("chat");
 const ctxEl = document.getElementById("ctx");
+const ctxEdit = document.getElementById("ctxEdit");
 const input = document.getElementById("input");
 const filesEl = document.getElementById("files");
 const composer = document.getElementById("composer");
@@ -537,11 +538,18 @@ function actionTitle(step) {
   return text || "Run command";
 }
 
+let stateLocked = true;
+
 function renderContext(text) {
   const next = String(text || "");
+  if (!stateLocked && ctxEdit && document.activeElement === ctxEdit) return;
   const changed = next !== context;
   context = next;
   if (changed) note("state", next);
+  if (!stateLocked && ctxEdit) {
+    ctxEdit.value = context;
+    return;
+  }
   if (!ctxEl) return;
   ctxEl.innerHTML = "";
   const raw = context.trim();
@@ -1291,9 +1299,52 @@ if (copyDraft && composer) {
 }
 var copyState = document.getElementById("copyState");
 var aside = document.querySelector("aside");
-if (copyState && aside) {
-  aside.appendChild(copyBtn(function () { return ctxEl ? ctxEl.textContent : ""; }));
-  copyState.remove();
+if (aside) {
+  aside.appendChild(copyBtn(function () {
+    return !stateLocked && ctxEdit ? ctxEdit.value : (context || "");
+  }));
+  if (copyState) copyState.remove();
+}
+var lockBtn = document.getElementById("lockState");
+var LOCK_ICON = '<svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><rect x="5" y="11" width="14" height="9" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3" fill="none" stroke="currentColor" stroke-width="2"/></svg>';
+var UNLOCK_ICON = '<svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><rect x="5" y="11" width="14" height="9" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M8 11V8a4 4 0 0 1 7.5-2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>';
+function paintLock() {
+  if (!lockBtn) return;
+  lockBtn.classList.toggle("open", !stateLocked);
+  lockBtn.title = stateLocked ? "Unlock to edit" : "Lock and save";
+  lockBtn.setAttribute("aria-label", lockBtn.title);
+  lockBtn.innerHTML = stateLocked ? LOCK_ICON : UNLOCK_ICON;
+  if (ctxEl) ctxEl.hidden = !stateLocked;
+  if (ctxEdit) ctxEdit.hidden = stateLocked;
+}
+if (lockBtn) {
+  paintLock();
+  lockBtn.onclick = async function () {
+    if (stateLocked) {
+      stateLocked = false;
+      if (ctxEdit) {
+        ctxEdit.value = context || "";
+        ctxEdit.focus();
+      }
+      paintLock();
+      return;
+    }
+    const text = ctxEdit ? ctxEdit.value : context;
+    try {
+      const r = await fetch("/api/context", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: text }),
+      });
+      const d = await r.json().catch(function () { return {}; });
+      if (!r.ok) throw new Error(d.error || "could not save state");
+      stateLocked = true;
+      paintLock();
+      renderContext(d.context != null ? d.context : text);
+    } catch (err) {
+      addMsg("err", err.message || "could not save state");
+    }
+  };
 }
 
 var exportBtn = document.getElementById("export");
@@ -1337,6 +1388,8 @@ if (clearBtn)
     if (chat) chat.replaceChildren();
     if (input) input.value = "";
     attached = [];
+    stateLocked = true;
+    paintLock();
     renderFiles();
     fitInput();
     try {

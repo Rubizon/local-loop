@@ -700,6 +700,12 @@ app.post("/api/check", async (req, res) => {
   }
 });
 
+app.post("/api/context", (req, res) => {
+  const text = String(req.body && req.body.text != null ? req.body.text : "");
+  saveContext(text);
+  res.json({ context: loadContext() });
+});
+
 app.post("/api/context/clear", (_req, res) => {
   saveContext("");
   ledger = [];

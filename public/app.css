@@ -382,7 +382,36 @@ aside h2 { margin: 0; font-size: 14px; font-weight: 600; }
   overflow-x: auto;
   min-height: 80px;
 }
-#ctx.empty { color: var(--muted); }
+button.icon-lock {
+  width: 26px;
+  height: 26px;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  background: transparent;
+  color: #a1a1aa;
+}
+button.icon-lock.open { color: #fff; background: #2a2a2a; }
+#ctxEdit {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  margin: 12px 0;
+  min-height: 160px;
+  max-height: 50vh;
+  padding: 12px;
+  background: #111;
+  color: var(--fg);
+  border: 1px solid #3a3a3a;
+  border-radius: 12px;
+  font-family: var(--mono);
+  font-size: 12.5px;
+  line-height: 1.45;
+  resize: vertical;
+}
+#ctxEdit[hidden] { display: none; }
 .ctx-line { display: block; }
 .keep-goal { color: #fff; }
 .keep { color: #e4e4e7; }

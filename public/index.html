@@ -34,10 +34,11 @@
     <aside>
       <div class="aside-h">
         <h2>State</h2>
-        <button type="button" id="copyState" class="tiny ghost">Copy</button>
+        <button type="button" id="lockState" class="icon-lock" aria-label="Unlock to edit" title="Unlock to edit"></button>
       </div>
       <p class="hint">The only memory. The model sees this text, not the chat. About 12 lines.</p>
       <pre id="ctx">(empty)</pre>
+      <textarea id="ctxEdit" hidden spellcheck="false" aria-label="State"></textarea>
     </aside>
   </main>
   <script src="/format.js"></script>
