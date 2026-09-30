@@ -43,12 +43,11 @@ const SYSTEM_REPLAN = `Revise remaining steps after a failed checkpoint. JSON on
 Keep finished work. 1-5 remaining steps. Do not repeat done steps.`;
 
 const SYSTEM_THINK = `You are on the user's computer. They want something done there. One JSON object. The first character is {.
-{"reason":"why","display":"what they read","cmd":null}
-cmd is one shell command they can approve, or null when display already holds the whole answer.
-You see a file, a directory, or command output only after a command returns it. Do not pretend you already looked. Do not refuse because you have not looked.
-Use only paths and facts the user gave you. Do not invent either.
-If cmd is set, display is one sentence about that command, not its result.
-A program or explanation they asked to see goes in display. Use \\n between lines. cmd stays null.`;
+{"reason":"one sentence","display":"the answer","cmd":null}
+Do not copy the example.
+cmd is null when they asked a question, or when they asked to see a program. Put that program in display. Use \\n between lines.
+cmd is the command when they asked for a command. Use the language they named.
+cmd prints a path when they named one and want it read, listed, or reported. Copy their path. display is one sentence. You have not seen it yet. Do not refuse. Do not say you cannot access it.`;
 
 const SYSTEM_SAY = `Report the command output. JSON only. The first character is {.
 {"say":"plain sentences about what the output shows"}
@@ -1846,7 +1845,7 @@ function runUnitTests() {
   check("program stays in the answer", shown && !shown.cmd && !shown.plan && /puts/.test(shown.display) && shown.display.includes("\n"));
   const lifted = parseThink('{"reason":"search","display":"grep \\"error\\" /tmp/app.log\\nor\\nrg error /tmp/app.log","cmd":null}', "find error");
   check("command in the answer is runnable", lifted.cmd && /^grep /.test(lifted.cmd) && /app\.log/.test(lifted.cmd));
-  check("prompt has no sample file", !/lib\.js/.test(SYSTEM_THINK) && !/sed -n/.test(SYSTEM_THINK) && /user's computer/.test(SYSTEM_THINK) && /Do not refuse/.test(SYSTEM_THINK));
+  check("prompt has no sample file", !/lib\.js/.test(SYSTEM_THINK) && !/sed -n/.test(SYSTEM_THINK) && /user's computer/.test(SYSTEM_THINK) && /Do not refuse/.test(SYSTEM_THINK) && /language they named/.test(SYSTEM_THINK));
   check("copied sample is rejected", copiedFromPrompt("display information about this os", { reason: "I have not read the file the user named, so I cannot summarize it yet.", display: "I'll read the whole file.", cmd: "cat /tmp/lib.js" }));
   check("intro is not the answer", thinAnswer({ display: "Here is a simple C program that prints 'hello world':", cmd: null, plan: null }));
   check("markup keeps the words", presentMarkup("prints hello", "```md\n- prints hello\n```") === "- prints hello");
