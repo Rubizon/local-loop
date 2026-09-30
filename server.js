@@ -426,8 +426,10 @@ app.post("/api/check", async (req, res) => {
       const oks = (nextPlan.steps || []).filter((s) => s.status === "ok");
       lastGoodStep = oks.length ? oks[oks.length - 1].id : lastGoodStep;
     }
+    const ending = check.ok ? lib.endReport(nextPlan, result, sessionCwd) : null;
+    const text = ending || (report && report.text) || null;
     saveContext(check.context);
-    res.json({ check, plan: nextPlan, report: report && report.text, cwd: sessionCwd });
+    res.json({ check, plan: nextPlan, report: text, done: !!ending, cwd: sessionCwd });
   } catch (err) {
     res.status(500).json({ error: String(err.message || err) });
   }

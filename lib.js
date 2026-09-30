@@ -474,7 +474,7 @@ function stepState(plan, step, result, ok, prev) {
   const nxt = upcoming[0];
   if (ok && nxt) lines.push("NEXT: " + nxt.do + (nxt.need ? " — use " + nxt.need : " — use the fact below"));
   else if (!ok) lines.push("NEXT: retry " + step.do + " — " + (step.expect || "the command must succeed"));
-  else lines.push("NEXT: none. The plan is finished.");
+  else lines.push("NEXT: waiting for a new instruction");
   const facts = [];
   const addFact = (text) => {
     const raw = String(text || "").trim();
@@ -535,6 +535,48 @@ function shortListing(stdout) {
   const shown = names.slice(0, 12);
   const lines = ["Short name list (" + names.length + "):"].concat(shown.map((n) => "- " + n));
   if (names.length > shown.length) lines.push("- … " + (names.length - shown.length) + " more");
+  return lines.join("\n");
+}
+
+function endReport(plan, result, cwd) {
+  const steps = (plan && plan.steps) || [];
+  if (!steps.length || steps.some((s) => s.status !== "ok")) return null;
+  const paths = [];
+  const add = (p) => {
+    const raw = String(p || "").trim();
+    if (!raw || paths.includes(raw)) return;
+    paths.push(raw);
+  };
+  const fromCmd = (cmd) => {
+    const text = String(cmd || "");
+    const opens = text.match(/open\('([^']+)'/g) || [];
+    opens.forEach((bit) => {
+      const m = bit.match(/open\('([^']+)'/);
+      if (m) add(m[1]);
+    });
+    const redir = text.match(/(?:>>?)\s*([^\s;&]+)/);
+    if (redir) add(redir[1]);
+    const zip = text.match(/\bzip\s+(\S+\.zip)\b/);
+    if (zip) add(zip[1]);
+  };
+  steps.forEach((s) => fromCmd(s.cmd));
+  fromCmd(result && result.cmd);
+  steps.forEach((s) => {
+    const m = String(s.note || "").match(/pdf:\s*(\S+)/);
+    if (m) add(m[1]);
+  });
+  const root = cwd || "";
+  const lines = ["Done."];
+  if (paths.length) {
+    paths.forEach((p) => {
+      const full = path.isAbsolute(p) || !root ? p : path.join(root, p);
+      lines.push((/\.pdf$/i.test(p) ? "PDF written to path: " : "Wrote path: ") + full);
+    });
+  } else {
+    const notes = steps.map((s) => String(s.note || "").trim()).filter(Boolean);
+    if (notes.length) lines.push(notes[notes.length - 1]);
+  }
+  lines.push("Waiting for the next instruction. Clear resets.");
   return lines.join("\n");
 }
 
@@ -856,6 +898,29 @@ function runUnitTests() {
   const listed = advance(mark(p, "1", "ok"), "next");
   const finished = finishReport(listed, { cmd: "ls -la /tmp", code: 0, stdout: "alpha\nbeta\n" });
   check("report finishes", finished && /alpha/.test(finished.text) && finished.plan.steps[1].status === "ok");
+  const ended = endReport(
+    {
+      steps: [
+        {
+          id: "2",
+          status: "ok",
+          do: "Write a PDF",
+          cmd: "python3 -c \"open('/tmp/tmp-summary.pdf','wb').write(b'')\"",
+          note: "pdf: /tmp/tmp-summary.pdf",
+        },
+      ],
+    },
+    { cmd: "python3 -c \"open('/tmp/tmp-summary.pdf','wb').write(b'')\"" },
+    "/tmp/loop-x"
+  );
+  check("end report pdf", ended && /PDF written to path: \/tmp\/tmp-summary\.pdf/.test(ended) && /Waiting for the next instruction/.test(ended));
+  const fileEnded = endReport(
+    { steps: [{ status: "ok", cmd: "python3 -c \"open('foo.txt','w').write('')\"" }] },
+    null,
+    "/tmp/loop-x"
+  );
+  check("end report file", fileEnded && /Wrote path: \/tmp\/loop-x\/foo\.txt/.test(fileEnded));
+  check("end report waits", endReport({ steps: [{ status: "todo", cmd: "ls" }] }, null, "/tmp") === null);
   const angry = heuristicPlan("look in my chat logs for all my angry remarks, collect them and put them into an excel and zip the excel");
   check("angry pipeline", angry && angry.steps.length === 4 && angry.steps[2].cmd == null);
   const c = heuristicCheck(p.steps[0], { cmd: "ls", code: 1, stdout: "" }, "KEEP GOAL: x");
@@ -916,6 +981,7 @@ module.exports = {
   summarizeOutput,
   shortListing,
   finishReport,
+  endReport,
   stepState,
   pdfBytes,
   pdfCommand,

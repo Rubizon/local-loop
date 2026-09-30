@@ -320,7 +320,7 @@ function renderPlan(host) {
     });
     setHold(actionTitle(step) + " needs a command. Show it, then approve it.");
   } else {
-    setHold(finished ? "Done. Nothing else is waiting." : "");
+    setHold(finished ? "Done. Waiting for the next instruction." : "");
   }
   items.push({
     label: "Drop plan",
@@ -414,6 +414,15 @@ async function checkpoint(result, host) {
     note("check", (d.check && d.check.ok ? "ok — " : "not ok — ") + ((d.check && (d.check.why || d.check.diagnosis)) || ""));
     note("plan", planText(plan));
     renderContext(d.check.context);
+    const finished = d.done || (d.plan && d.plan.steps && d.plan.steps.length && d.plan.steps.every(function (s) { return s.status === "ok"; }));
+    if (finished) {
+      plan = null;
+      check = null;
+      addMsg("bot", d.report || "Done.\nWaiting for the next instruction. Clear resets.");
+      renderPlan(host);
+      setHold("");
+      return;
+    }
     if (d.report) addMsg("bot", d.report);
     const nextLine = String((d.check && d.check.context) || "").split("\n").find((l) => /^NEXT:/.test(l));
     addMsg("bot", nextLine || (d.check && d.check.ok ? "Step finished." : "Step did not pass."));
