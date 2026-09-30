@@ -29,8 +29,8 @@ attach is what that rewrite keeps: summary for listings, paths for files written
 
 const SYSTEM_CHECK = `Output one JSON object and nothing else. The first character is {.
 {"ok":true,"why":"one line"}
-ok is true only when the output matches the expect. Do not rewrite state.
-Example: {"ok":true,"why":"names found"}`;
+ok is false when the output is an error, empty, or does not answer the task.
+Example: {"ok":false,"why":"the file was not summarized"}`;
 
 const SYSTEM_EMIT = `Emit ONE command for this step, or ask. JSON only:
 {"cmd":"one shell command or null","ask":"question or null"}
@@ -106,6 +106,13 @@ function progressState(goal, index, total, notes) {
     if (bit) lines.push("NOTE: " + clip(bit, 240));
   });
   return lines.join("\n");
+}
+
+function parseVerdict(raw) {
+  const parsed = extractJson(raw);
+  if (!parsed || parsed._raw || typeof parsed.ok !== "boolean") return null;
+  const why = String(parsed.why || "").trim();
+  return { ok: parsed.ok, why: why || (parsed.ok ? "matches" : "does not match") };
 }
 
 function previewOutput(text, n) {
@@ -1181,6 +1188,8 @@ function runUnitTests() {
   check("preview keeps the tail count", /more characters$/.test(previewOutput("abcdef", 3)) && previewOutput("abcdef", 3).startsWith("abc"));
   const live = progressState("read lib.js", 2, 5, ["constants", "functions"]);
   check("progress state is visible", /KEEP GOAL: read lib\.js/.test(live) && /part 2 of 5/.test(live) && /NOTE: constants/.test(live) && /NOTE: functions/.test(live));
+  check("check can reject", parseVerdict('{"ok":false,"why":"only the first lines"}').ok === false);
+  check("check ignores prose", parseVerdict("looks fine") === null);
   check("ok string is success", parseCheck('{"ok":"ok","why":"ok"}', "").ok === true);
   const emitted = heuristicEmit(pdfPlan.steps[1], stated);
   check("emit pdf", emitted && /tmp-summary\.pdf/.test(emitted.cmd || "") && pdfBytes("names").slice(0, 5).toString() === "%PDF-");
@@ -1273,6 +1282,7 @@ module.exports = {
   MODEL_PROBE_USER,
   contextCharBudget,
   progressState,
+  parseVerdict,
   previewOutput,
   clip,
   chunkText,

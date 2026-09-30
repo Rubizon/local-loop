@@ -153,6 +153,19 @@ async function reduceReport(task, text, depth, onPart) {
   return reduceReport(task, notes.map((n, i) => i + 1 + ". " + n).join("\n"), (depth || 0) + 1, onPart);
 }
 
+async function modelJudge(task, step, evidence) {
+  const raw = await ollamaText(
+    lib.SYSTEM_CHECK,
+    [
+      "Task: " + lib.clip(task, 200),
+      "Expect: " + lib.clip((step && step.expect) || "the output answers the task", 160),
+      "What came back:\n" + lib.clip(evidence, 900),
+    ].join("\n"),
+    80
+  );
+  return lib.parseVerdict(raw);
+}
+
 async function ollamaText(system, user, numPredict = 280) {
   const res = await fetch(`${OLLAMA_HOST}/api/chat`, {
     method: "POST",
@@ -498,6 +511,18 @@ app.post("/api/check", async (req, res) => {
         reportText = "";
       }
     }
+    if (check.ok && plan && plan.fromModel && !listing) {
+      try {
+        const evidence = reportText || lib.clip(produced, 900);
+        const judged = evidence.trim() ? await modelJudge(plan.ask || plan.goal || (step && step.do) || "", step, evidence) : null;
+        if (judged && judged.ok === false) {
+          check.ok = false;
+          check.why = judged.why;
+          check.replan = true;
+          check.next = step.id;
+        }
+      } catch (_) {}
+    }
     const summary = reportText ? lib.clip(reportText.replace(/\s+/g, " "), 360) : summarySeed;
     let stamped = plan;
     if (summary) {
@@ -534,7 +559,8 @@ app.post("/api/check", async (req, res) => {
       result: result,
       cwd: sessionCwd,
     });
-    if (reportText) say = reportText;
+    if (reportText && check.ok) say = reportText;
+    else if (reportText) say = reportText + "\n\nNot done. " + check.why;
     else if (check.ok && !listing && ((plan && plan.fromModel) || overContext)) {
       say = "The output was too large to report in one pass, and the summary failed.";
     }
