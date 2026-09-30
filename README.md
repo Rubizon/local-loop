@@ -16,6 +16,20 @@ The model receives the state plus one event, not the conversation. It answers wi
 
 The inbox demo is two stops: read the notes, then one script that writes `summary.txt` and the PDF.
 
+## Start on Ubuntu
+
+Clone once. After that, this is the only command. It fetches `main`, then starts the copy of the script it just downloaded, then serves the app.
+
+```bash
+git clone https://github.com/Rubizon/local-loop.git
+cd local-loop
+bash run.sh
+```
+
+Open http://127.0.0.1:3847
+
+`run.sh` resets this checkout to `origin/main`. Local edits in tracked files are discarded. `data/` is left alone. Set `PORT` if 3847 is taken. Set `OLLAMA_MODEL` before `bash run.sh` when a model should answer.
+
 ## Earlier harness
 
 ```bash
@@ -24,6 +38,5 @@ npm test
 OLLAMA_MODEL=qwen2.5-coder:3b-8k npm start
 ```
 
-Open http://127.0.0.1:3847
 
 A plan can ask one question. The answer rewrites the plan. Reports may be short markdown: headings, lists, emphasis, and code. Only normal web links are clickable.
