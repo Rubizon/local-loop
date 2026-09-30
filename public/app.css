@@ -109,8 +109,27 @@ main {
   min-height: 18px;
   margin-bottom: 6px;
 }
-.viewbar .status { color: var(--muted); font-size: 12px; }
+.viewbar .status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 12px;
+}
 .viewbar .status[hidden] { display: none; }
+.viewbar .dots i { width: 5px; height: 5px; }
+.read h1, .read h2, .read h3 {
+  font-family: var(--mono);
+  font-weight: 650;
+  line-height: 1.3;
+  margin: 12px 0 6px;
+}
+.read h1 { font-size: 18px; }
+.read h2 { font-size: 16px; }
+.read h3 { font-size: 14.5px; }
+.read hr { border: 0; border-top: 1px solid var(--line); margin: 12px 0; }
+.read a { color: inherit; }
+.read em { font-style: italic; }
 button.tiny {
   padding: 2px 8px;
   font-size: 12px;

@@ -93,7 +93,7 @@ function setBusy(on, label) {
 }
 
 function addInline(parent, text) {
-  const re = /(`[^`]+`|\*\*[^*]+\*\*)/g;
+  const re = /(`[^`]+`|\*\*[^*]+\*\*|\*[^*\n]+\*|https?:\/\/[^\s)]+)/g;
   let last = 0;
   let match;
   while ((match = re.exec(text))) {
@@ -104,10 +104,17 @@ function addInline(parent, text) {
       code.className = "inline";
       code.textContent = bit.slice(1, -1);
       parent.appendChild(code);
-    } else {
-      const strong = document.createElement("strong");
-      strong.textContent = bit.slice(2, -2);
+    } else if (bit.charAt(0) === "*") {
+      const strong = document.createElement(bit.charAt(1) === "*" ? "strong" : "em");
+      strong.textContent = bit.replace(/^\*+|\*+$/g, "");
       parent.appendChild(strong);
+    } else {
+      const a = document.createElement("a");
+      a.href = bit.replace(/[.,;:]+$/, "");
+      a.textContent = a.href;
+      a.target = "_blank";
+      a.rel = "noopener noreferrer";
+      parent.appendChild(a);
     }
     last = match.index + bit.length;
   }
@@ -149,6 +156,7 @@ function addBlocks(host, text) {
   const lines = String(text || "").replace(/\r\n/g, "\n").split("\n");
   let para = [];
   let list = null;
+  let aligned = [];
   function flushPara() {
     if (!para.length) return;
     const p = document.createElement("p");
@@ -159,14 +167,45 @@ function addBlocks(host, text) {
   function flushList() {
     list = null;
   }
+  function flushAligned() {
+    if (!aligned.length) return;
+    addPre(host, aligned.join("\n"));
+    aligned = [];
+  }
+  function isAligned(line) {
+    return /\S {2,}\S/.test(line) && !/^#{1,4}\s/.test(line) && !/^\s*(?:[-*]|•)\s/.test(line);
+  }
   lines.forEach(function (line) {
-    const bullet = line.match(/^\s*[-*]\s+(.*)$/);
-    const numbered = line.match(/^\s*\d+[.)]\s+(.*)$/);
     if (!line.trim()) {
       flushPara();
       flushList();
+      flushAligned();
       return;
     }
+    if (isAligned(line)) {
+      flushPara();
+      flushList();
+      aligned.push(line.replace(/\s+$/, ""));
+      return;
+    }
+    flushAligned();
+    const heading = line.match(/^(#{1,4})\s+(.*)$/);
+    if (heading) {
+      flushPara();
+      flushList();
+      const h = document.createElement("h" + Math.min(heading[1].length, 3));
+      addInline(h, heading[2]);
+      host.appendChild(h);
+      return;
+    }
+    if (/^---+$/.test(line.trim())) {
+      flushPara();
+      flushList();
+      host.appendChild(document.createElement("hr"));
+      return;
+    }
+    const bullet = line.match(/^\s*(?:[-*]|•)\s+(.*)$/);
+    const numbered = line.match(/^\s*\d+[.)]\s+(.*)$/);
     if (bullet || numbered) {
       flushPara();
       if (!list || (numbered && list.tagName !== "OL") || (bullet && list.tagName !== "UL")) {
@@ -182,6 +221,7 @@ function addBlocks(host, text) {
     para.push(line.trim());
   });
   flushPara();
+  flushAligned();
 }
 
 function addPre(host, text) {
@@ -203,11 +243,11 @@ function renderMarkdown(md, host) {
   let last = 0;
   let match;
   while ((match = re.exec(src))) {
-    if (match.index > last) addPre(host, src.slice(last, match.index));
+    if (match.index > last) addBlocks(host, src.slice(last, match.index));
     addCodeBox(host, match[1].trim(), match[2]);
     last = match.index + match[0].length;
   }
-  if (last < src.length) addPre(host, src.slice(last));
+  if (last < src.length) addBlocks(host, src.slice(last));
   if (!host.childNodes.length) {
     const p = document.createElement("p");
     p.textContent = src;
@@ -225,7 +265,13 @@ function dress(box, raw) {
   bar.className = "viewbar";
   const status = document.createElement("span");
   status.className = "status";
-  status.textContent = "Formatting";
+  const dots = document.createElement("span");
+  dots.className = "dots";
+  dots.appendChild(document.createElement("i"));
+  dots.appendChild(document.createElement("i"));
+  dots.appendChild(document.createElement("i"));
+  status.appendChild(dots);
+  status.appendChild(document.createTextNode(" Formatting"));
   const toggle = document.createElement("button");
   toggle.type = "button";
   toggle.className = "tiny ghost";
@@ -247,7 +293,6 @@ function dress(box, raw) {
   if (shaped && shaped.trim() !== text.trim()) {
     renderMarkdown(shaped, read);
     toggle.hidden = false;
-    if (/```/.test(shaped)) status.hidden = true;
   }
   let showRaw = false;
   function paint() {
