@@ -24,9 +24,10 @@ function clipText(text, n) {
 }
 
 function note(kind, text) {
-  const event = { t: new Date().toISOString(), kind: kind, text: clipText(text, 4000) };
+  const cap = kind === "reason" || kind === "format" ? 50000 : 4000;
+  const event = { t: new Date().toISOString(), kind: kind, text: clipText(text, cap) };
   trace.push(event);
-  if (trace.length > 200) trace.shift();
+  if (trace.length > 400) trace.shift();
   return event;
 }
 
@@ -257,6 +258,7 @@ function renderMarkdown(md, host) {
 
 function dress(box, raw) {
   if (!box || !box.body) return;
+  if (box.div && !box.div.querySelector(".reason")) showReason(box.div, "");
   const text = String(raw || "");
   const body = box.body;
   body.textContent = "";
@@ -318,10 +320,12 @@ function dress(box, raw) {
         renderMarkdown(pretty, read);
         toggle.hidden = false;
       }
+      note("format", "source:\n" + text + "\n\nlocal:\n" + shaped + "\n\nmarkup:\n" + modelText + "\n\nshown:\n" + pretty);
       status.hidden = true;
       paint();
     })
-    .catch(function () {
+    .catch(function (err) {
+      note("format", "markup failed: " + (err && err.message ? err.message : "error") + "\n\nsource:\n" + text);
       status.hidden = true;
     });
 }
@@ -363,46 +367,54 @@ function showDoubt(box, warning) {
   note("unsure", (warning.sign || "") + " " + (warning.why || ""));
 }
 
-var formatReason = false;
-try { formatReason = localStorage.getItem("format-reason") === "1"; } catch (_) {}
-
-function renderReasonBody(pre, text) {
-  var raw = String(text || "");
-  if (!formatReason || !window.LoopFormat) {
-    pre.textContent = raw;
-    return;
-  }
-  var shaped = LoopFormat.formatAnswer(raw);
-  pre.textContent = shaped.replace(/^```[a-zA-Z0-9+#]*\n/, "").replace(/\n```$/, "");
-}
-
 function showReason(box, text) {
-  if (!box || !text) return;
+  if (!box || box.querySelector(".reason")) return;
+  const raw = String(text || "").trim();
   const el = document.createElement("div");
   el.className = "reason";
-  const k = document.createElement("div");
+  const k = document.createElement("button");
+  k.type = "button";
   k.className = "reason-k";
   k.textContent = "Reasoning";
+  const panel = document.createElement("div");
+  panel.className = "reason-panel";
+  panel.hidden = true;
+  const bar = document.createElement("div");
+  bar.className = "reason-bar";
+  const fmt = document.createElement("button");
+  fmt.type = "button";
+  fmt.className = "tiny ghost";
+  fmt.textContent = "Format";
   const pre = document.createElement("pre");
   pre.className = "reason-body";
-  pre.dataset.raw = text;
-  renderReasonBody(pre, text);
+  pre.textContent = raw || "(none)";
+  let formatted = false;
+  fmt.onclick = function () {
+    formatted = !formatted;
+    if (!formatted || !window.LoopFormat) {
+      pre.textContent = raw || "(none)";
+      fmt.textContent = "Format";
+      return;
+    }
+    var shaped = LoopFormat.formatAnswer(raw);
+    pre.textContent = shaped.replace(/^```[a-zA-Z0-9+#]*\n/, "").replace(/\n```$/, "") || raw;
+    fmt.textContent = "Plain";
+    note("format", "reasoning formatted\n\n" + pre.textContent);
+  };
+  k.onclick = function () {
+    const open = panel.hidden;
+    panel.hidden = !open;
+    el.classList.toggle("open", open);
+  };
+  bar.appendChild(fmt);
+  panel.appendChild(bar);
+  panel.appendChild(pre);
   el.appendChild(k);
-  el.appendChild(pre);
+  el.appendChild(panel);
   const body = box.querySelector(".body");
   if (body) box.insertBefore(el, body);
   else box.appendChild(el);
-  note("reason", text);
-}
-
-function setFormatReason(on) {
-  formatReason = !!on;
-  try { localStorage.setItem("format-reason", formatReason ? "1" : "0"); } catch (_) {}
-  document.querySelectorAll(".reason-body").forEach(function (pre) {
-    renderReasonBody(pre, pre.dataset.raw || "");
-  });
-  var btn = document.getElementById("reasonFmt");
-  if (btn) btn.classList.toggle("on", formatReason);
+  if (raw) note("reason", raw);
 }
 
 function actionTitle(step) {
@@ -1077,11 +1089,6 @@ function downloadText(filename, text) {
 }
 
 var testBtn = document.getElementById("test");
-var reasonFmtBtn = document.getElementById("reasonFmt");
-if (reasonFmtBtn) {
-  reasonFmtBtn.classList.toggle("on", formatReason);
-  reasonFmtBtn.onclick = function () { setFormatReason(!formatReason); };
-}
 if (testBtn)
   testBtn.onclick = async function () {
     const box = addMsg("bot", "Testing the model…");

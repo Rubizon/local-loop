@@ -220,11 +220,20 @@ button.tiny {
   font-size: 13.5px;
 }
 .reason-k {
+  background: none;
+  border: 0;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 0;
+  font: inherit;
   font-size: 11px;
   letter-spacing: .04em;
   text-transform: uppercase;
-  margin-bottom: 4px;
 }
+.reason-k:before { content: "▸  "; }
+.reason.open .reason-k:before { content: "▾  "; }
+.reason-panel[hidden] { display: none; }
+.reason-bar { display: flex; justify-content: flex-end; margin: 6px 0 4px; }
 .unsure {
   margin: 0 0 12px;
   padding: 8px 10px;

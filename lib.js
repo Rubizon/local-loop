@@ -1393,10 +1393,12 @@ function formatSession(info) {
   ];
   const events = (info && info.events) || [];
   if (!events.length) lines.push("(no conversation yet)");
-  events.slice(0, 200).forEach((e, i) => {
+  events.slice(0, 400).forEach((e, i) => {
+    const kind = e.kind || "note";
+    const cap = kind === "reason" || kind === "format" ? 50000 : 4000;
     lines.push("");
-    lines.push("--- " + (i + 1) + " " + (e.kind || "note") + " " + (e.t || "") + " ---");
-    lines.push(clip(String(e.text || ""), 4000) || "(empty)");
+    lines.push("--- " + (i + 1) + " " + kind + " " + (e.t || "") + " ---");
+    lines.push(clip(String(e.text || ""), cap) || "(empty)");
   });
   lines.push("");
   lines.push("== current state ==");
@@ -1798,6 +1800,7 @@ function runUnitTests() {
     plan: "1 [todo] Write foo.txt",
   });
   check("session export", /== events ==/.test(session) && /--- 1 you t1 ---/.test(session) && /write foo.txt/.test(session) && /== current plan ==/.test(session));
+  check("export keeps reasoning and formatting", /--- 1 reason /.test(formatSession({ events: [{ kind: "reason", t: "t", text: "R".repeat(5000) }, { kind: "format", t: "t", text: "shown:\nhello" }], state: "" })) && formatSession({ events: [{ kind: "reason", t: "t", text: "R".repeat(5000) }], state: "" }).includes("R".repeat(5000)));
   check("empty model plan", parsePlan("cmd null", "create a file").steps.length === 0);
   check("no goal drops", finalizeRewrite("", "FACT: x", "hi") === "");
   check("heuristic rewrite skip", heuristicRewrite("", "ls /tmp", "list") === "");
