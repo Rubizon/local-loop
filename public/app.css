@@ -127,6 +127,13 @@ main {
   border-bottom: 1px solid #2a2a2a;
 }
 .plan-row.current { background: #262626; }
+.plan-k {
+  display: inline-block;
+  margin-right: 8px;
+  font-size: 11px;
+  letter-spacing: .04em;
+  color: var(--muted);
+}
 .cmd {
   margin: 0;
   padding: 12px;

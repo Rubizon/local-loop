@@ -441,6 +441,7 @@ async function checkpoint(result, host) {
     renderPlan(host);
   } catch (e) {
     addMsg("err", e.name === "AbortError" ? "Stopped. The output summary took longer than 4 minutes." : e.message);
+    renderPlan(host);
   } finally {
     clearTimeout(timer);
     setBusy(false);
@@ -473,12 +474,16 @@ async function runPlanStep(host) {
     }
     return;
   }
+  host.querySelectorAll(".plan .rowbtns").forEach(function (n) {
+    n.remove();
+  });
   try {
     await applyOne(step.cmd, step.id, host, function (result) {
       return checkpoint(result, host);
     });
   } catch (e) {
     addMsg("err", e.message);
+    renderPlan(host);
   }
 }
 
