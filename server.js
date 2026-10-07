@@ -119,13 +119,11 @@ async function reduceReport(task, text, depth, onPart) {
   if (onPart) onPart(1, chunks.length, notes);
   for (let i = 0; i < chunks.length; i++) {
     try {
-      const parsed = lib.extractJson(
-        await ollamaText(
+      const parsed = lib.extractJson(lib.repairReply("note", await ollamaText(
           lib.SYSTEM_NOTE,
           "Task: " + ask + "\nPart " + (i + 1) + " of " + chunks.length + ":\n" + chunks[i],
           80
-        )
-      );
+        ), ""));
       const note = typeof parsed.note === "string" ? parsed.note.trim() : "";
       if (note && !/\b(KEEP|FACT|NEXT)\b/.test(note)) notes.push(note);
     } catch (_) {}

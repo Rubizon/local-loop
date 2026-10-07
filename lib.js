@@ -106,7 +106,8 @@ const SYSTEM_SAY = `Report the command output. JSON only. The first character is
 Use only the output. No KEEP, FACT, or NEXT.`;
 
 const SYSTEM_NOTE = `One JSON object. The first character is {.
-{"note":"one sentence of what this part adds"}
+{"note":"one sentence"}
+The sentence is the value of the quoted key note. Do not wrap a sentence in braces.
 Do not paste code.`;
 
 const SYSTEM_MARKUP = `The user pressed Format on one chat bubble. Markdown only. Do not add or drop words.
@@ -266,9 +267,22 @@ function extractJson(text) {
   if (start === -1) return { display: clip(trimmed, 2000), _raw: true };
   let depth = 0;
   let end = -1;
+  let quote = "";
+  let escape = false;
   for (let i = start; i < candidate.length; i++) {
-    if (candidate[i] === "{") depth++;
-    else if (candidate[i] === "}") {
+    const ch = candidate[i];
+    if (quote) {
+      if (escape) escape = false;
+      else if (ch === "\\") escape = true;
+      else if (ch === quote) quote = "";
+      continue;
+    }
+    if (ch === '"') {
+      quote = ch;
+      continue;
+    }
+    if (ch === "{") depth++;
+    else if (ch === "}") {
       depth--;
       if (depth === 0) {
         end = i;
@@ -691,7 +705,13 @@ function salvageProgram(raw) {
   const src = String(raw || "");
   const start = src.search(/#include\s*</);
   if (start < 0) return "";
-  let program = src.slice(start).replace(/```/g, "").trim();
+  let program = src.slice(start);
+  const cut = program.search(/\n?\s*"\s*,\s*"cmd"|\nEOF\b|\\nEOF/);
+  if (cut > 0) program = program.slice(0, cut);
+  program = program.replace(/\\n/g, "\n").replace(/\\"/g, '"').replace(/```/g, "").trim();
+  const eof = program.search(/EOF/);
+  if (eof > 0) program = program.slice(0, eof);
+  program = program.replace(/\nEOF[\s\S]*$/i, "").trim();
   const end = program.lastIndexOf("}");
   if (end >= 0) program = program.slice(0, end + 1).trim();
   if (!/#include|printf|puts/.test(program)) return "";
@@ -716,6 +736,14 @@ function shellish(cmd) {
 }
 
 function repairReply(kind, raw, userText) {
+  if (kind === "note" || kind === "say") {
+    const key = kind === "note" ? "note" : "say";
+    const parsed = extractJson(raw);
+    if (!parsed._raw && typeof parsed[key] === "string" && parsed[key].trim()) return String(raw || "");
+    const loose = looseBrace(raw);
+    if (loose) return JSON.stringify({ [key]: loose });
+    return String(raw || "");
+  }
   const thinkKinds = { think: 1, ask: 1, concat: 1, code: 1, clock: 1, weekday: 1, host: 1, who: 1, cwd: 1, disk: 1, listing: 1 };
   if (!thinkKinds[kind]) return String(raw || "");
   const user = String(userText || "");
@@ -726,7 +754,8 @@ function repairReply(kind, raw, userText) {
   const wantsProgram = /write a .*(program|function)/i.test(user) && !/command/i.test(user);
   if (wantsProgram) {
     const fromJson = !parsed._raw && typeof parsed.display === "string" ? parsed.display : "";
-    const program = /#include|printf|puts/.test(fromJson) ? fromJson : salvageProgram(source);
+    const found = /#include|printf|puts/.test(fromJson) ? fromJson : source;
+    const program = salvageProgram(found);
     if (program) {
       return JSON.stringify({ reason: "They asked to see the program.", display: program, cmd: null });
     }
@@ -2234,7 +2263,10 @@ function runUnitTests() {
   check("heuristic rewrite skip", heuristicRewrite("", "ls /tmp", "list") === "");
   const kept = finalizeRewrite("KEEP GOAL: inspect /tmp", "FACT: aider", "add");
   check("keep goal", /KEEP GOAL/.test(kept) && /aider/.test(kept));
-  check("extractJson", extractJson('{"display":"hi","cmd":null}').display === "hi");
+  check("braces inside a string stay in the JSON", extractJson('{"display":"int main() { return 0; }","cmd":null}').display === "int main() { return 0; }");
+  check("a braced sentence is a note", scoreWorkflow("note", repairReply("note", "{This function simply returns a constant value of 1, indicating a successful local turn.}", "")).ok === true);
+  const brokenC = '{"reason":"They asked to see the program.","display":"#include <stdio.h>\\\\n\\\\nint main() {\\\\n printf(\\\\"hello\\\\");\\\\n return 0;\\\\n}\\\\nEOF\\\\"\\n}","cmd":null}';
+  check("a broken C reply still shows the program", scoreWorkflow("code", repairReply("code", brokenC, "User: write a simple C program that prints hello world")).ok === true);
   check("direct cmd alias", parseDirect('{"display":"ok","commands":["ls -la /tmp"]}').cmd === "ls -la /tmp");
   check("summarize ls", /aider/.test(summarizeOutput("ls -la /tmp", "total 1\ndrwx aider")));
   const many = Array.from({ length: 20 }, (_, i) => "f" + i).join("\n");
