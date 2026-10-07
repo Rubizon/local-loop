@@ -929,10 +929,11 @@ async function applyOne(cmd, stepId, host, after) {
     const term = document.createElement("div");
     term.className = "term";
     const text = (ran.stdout || "") + (ran.stderr ? "\n" + ran.stderr : "");
-    const full = "$ " + (ran.cmd || cmd) + "  exit " + ran.code + (ran.code === 124 ? "  (stopped: no output or too long)" : "") + (text.trim() ? "\n" + text : "");
+    const stopped = ran.code === 124 ? ((ran.stdout || "").trim() ? "  (stopped: it kept running)" : "  (stopped: no output)") : "";
+    const full = "$ " + (ran.cmd || cmd) + "  exit " + ran.code + stopped + (text.trim() ? "\n" + text : "");
     const pre = document.createElement("pre");
     pre.className = "native";
-    pre.textContent = "$ " + (ran.cmd || cmd) + "  exit " + ran.code + (ran.code === 124 ? "  (stopped: no output or too long)" : "");
+    pre.textContent = "$ " + (ran.cmd || cmd) + "  exit " + ran.code + stopped;
     term.appendChild(pre);
     term.appendChild(copyBtn(full));
     if (text.trim()) {

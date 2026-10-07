@@ -181,8 +181,52 @@ function parseVerdict(raw) {
   return { ok: parsed.ok, why: why || (parsed.ok ? "matches" : "does not match") };
 }
 
+function screenText(raw) {
+  const s = String(raw || "");
+  if (!/\x1b/.test(s)) return s;
+  const rows = [];
+  let r = 0;
+  let c = 0;
+  const write = (ch) => {
+    if (r > 40 || c > 180) return;
+    if (!rows[r]) rows[r] = "";
+    if (c > rows[r].length) rows[r] += " ".repeat(c - rows[r].length);
+    rows[r] = rows[r].slice(0, c) + ch + rows[r].slice(c + 1);
+    c += 1;
+  };
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i];
+    if (ch === "\n") { r += 1; c = 0; continue; }
+    if (ch === "\r") { c = 0; continue; }
+    if (ch !== "\x1b") {
+      if (ch >= " " || ch === "\t") write(ch);
+      continue;
+    }
+    if (s[i + 1] !== "[") { i += 1; continue; }
+    let j = i + 2;
+    while (j < s.length && /[0-9;?]/.test(s[j])) j++;
+    const final = s[j] || "";
+    const arg = s.slice(i + 2, j);
+    const nums = arg.split(";").map((n) => Number(n || "0"));
+    if (final === "H" || final === "f") {
+      r = Math.max(0, (nums[0] || 1) - 1);
+      c = Math.max(0, (nums[1] || 1) - 1);
+    } else if (final === "J" && (arg === "2" || arg === "")) {
+      rows.length = 0;
+      r = 0;
+      c = 0;
+    } else if (final === "A") r = Math.max(0, r - (nums[0] || 1));
+    else if (final === "B") r += nums[0] || 1;
+    else if (final === "C") c += nums[0] || 1;
+    else if (final === "D") c = Math.max(0, c - (nums[0] || 1));
+    else if (final === "G") c = Math.max(0, (nums[0] || 1) - 1);
+    i = j;
+  }
+  return rows.map((line) => String(line || "").replace(/\s+$/g, "")).join("\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+
 function previewOutput(text, n) {
-  const s = String(text || "");
+  const s = screenText(text);
   const limit = n || 8000;
   if (s.length <= limit) return s;
   return s.slice(0, limit) + "\n… " + (s.length - limit) + " more characters";
@@ -1599,8 +1643,13 @@ function runGuarded(cmd, cwd, opts) {
       clearTimeout(idle);
       clearTimeout(hard);
       if (killed) {
-        const why = stdout.length > maxOut ? "Stopped. The output was too large." : "Stopped. No output, or it ran too long.";
+        stdout = screenText(stdout);
+        stderr = screenText(stderr);
+        const why = stdout.length > maxOut ? "Stopped. The output was too large." : stdout.trim() || stderr.trim() ? "Stopped. It kept running, so it was closed." : "Stopped. No output, and it did not exit.";
         stderr = (stderr ? stderr + "\n" : "") + why;
+      } else {
+        stdout = screenText(stdout);
+        stderr = screenText(stderr);
       }
       resolve({
         cmd: cmd,
@@ -2312,6 +2361,10 @@ function runUnitTests() {
   check("a write is not a failed listing", judge({ do: "I will generate a list of workdays and save it to the file foo.txt.", expect: "the command output" }, { cmd: "date -d 'next monday' > foo.txt", code: 0, stdout: "", stderr: "" }).ok === true);
   check("an empty listing still fails", judge({ do: "List /tmp", expect: "names" }, { cmd: "ls -la /tmp", code: 0, stdout: "", stderr: "" }).ok === false);
   check("a monitor runs once", oneShot("watch -n 1 'nvidia-smi; lscpu | head -1'") === "nvidia-smi; lscpu | head -1");
+  check("a redraw keeps the last value", (() => {
+    const shown = screenText("\x1b[H\x1b[2Jtemp\x1b[2;1H54\x1b[2;1H53");
+    return shown.indexOf("temp") >= 0 && shown.indexOf("53") >= 0 && shown.indexOf("54") < 0 && shown.indexOf("\x1b") < 0;
+  })());
   check("a screen that never exits is refused", oneShot("top") === "");
   check("ping takes one sample", oneShot("ping example.com") === "ping -c 3 example.com");
   check("multi-line command is allowed", assertSafeCmd("printf '%s\\n' Monday Tuesday > days.txt\necho done").indexOf("\n") > 0);
