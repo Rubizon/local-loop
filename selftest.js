@@ -109,6 +109,12 @@ async function main() {
     process.exitCode = 1;
     return;
   }
+  const beats = await lib.selfCheckBeats();
+  console.log(`beats ${beats.passed}/${beats.total}${beats.ok ? "" : "  " + beats.detail}`);
+  if (!beats.ok) {
+    process.exitCode = 1;
+    return;
+  }
   if (process.argv.includes("--unit-only")) return;
   try {
     const probe = await runWorkflow();

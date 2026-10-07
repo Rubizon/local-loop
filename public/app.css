@@ -421,6 +421,10 @@ aside h2 { margin: 0; font-size: 14px; font-weight: 600; }
 #ctxEdit[hidden] { display: none; }
 .ctx-line { display: block; }
 .keep-goal { color: #fff; }
+.method { color: #e7e5e4; }
+.cursor { color: var(--muted); }
+.ask { color: #fde68a; }
+.slot { color: #d6d3d1; }
 .keep { color: #e4e4e7; }
 .fact { color: var(--muted); }
 .note-line { color: var(--fg); }

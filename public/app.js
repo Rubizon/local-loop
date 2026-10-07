@@ -15,7 +15,7 @@ let context = "";
 let pendingA = null;
 let plan = null;
 let check = null;
-let numCtx = 8192;
+let numCtx = 4096;
 let attached = [];
 const trace = [];
 
@@ -36,7 +36,7 @@ function planText(p) {
   if (!p || !p.steps) return "";
   const lines = [p.goal || ""];
   p.steps.forEach(function (s) {
-    lines.push(s.id + " [" + (s.status || "todo") + "] " + (s.do || ""));
+    lines.push(s.id + " [" + (s.status || "todo") + "] " + (s.method ? s.method + " " : "") + (s.do || ""));
     if (s.cmd) lines.push("  cmd: " + s.cmd);
   });
   return lines.join("\n");
@@ -534,8 +534,11 @@ function showReason(box, text) {
 function actionTitle(step) {
   const text = String((step && step.do) || "");
   const cmd = String((step && step.cmd) || "").trim();
+  if (step && step.method === "ask") return "Ask";
+  if (step && step.method === "say") return "Answer";
   if (/pdf/i.test(text) || /\.pdf\b/.test(cmd)) return "Create PDF";
   if (/^(ls|find|tree)\b/.test(cmd)) return "List files";
+  if (step && step.method === "cmd") return text || "Run command";
   return text || "Run command";
 }
 
@@ -563,7 +566,11 @@ function renderContext(text) {
   raw.split("\n").forEach(function (line) {
     const span = document.createElement("span");
     span.className = "ctx-line";
-    if (/^KEEP\s+GOAL:/i.test(line)) span.className += " keep-goal";
+    if (/^GOAL:/i.test(line) || /^KEEP\s+GOAL:/i.test(line)) span.className += " keep-goal";
+    else if (/^METHOD:/i.test(line)) span.className += " method";
+    else if (/^CURSOR:/i.test(line)) span.className += " cursor";
+    else if (/^ASK:/i.test(line)) span.className += " ask";
+    else if (/^SLOT\b/i.test(line)) span.className += " slot";
     else if (/^KEEP\b/i.test(line)) span.className += " keep";
     else if (/^FACT:/i.test(line)) span.className += " fact";
     else if (/^NOTE:/i.test(line)) span.className += " note-line";
@@ -580,7 +587,7 @@ async function updateBudget() {
       body: JSON.stringify({ text: input ? input.value : "" }),
     });
     const s = await r.json();
-    numCtx = s.numCtx || 8192;
+    numCtx = s.numCtx || 4096;
     if (budgetEl) budgetEl.className = "meter" + (s.pct >= 70 ? " high" : "");
     setText(budgetEl, "~" + s.tokens + " / " + s.numCtx);
   } catch (_) {
@@ -617,7 +624,7 @@ async function refresh() {
   setText(chipModel, s.model || "model");
   setText(chipCwd, "cwd " + (s.cwd || s.workspace || ""));
   if (chipCwd) chipCwd.title = s.cwd || s.workspace || "";
-  numCtx = s.numCtx || 8192;
+  numCtx = s.numCtx || 4096;
   renderContext(s.context);
 }
 
@@ -780,7 +787,7 @@ function renderPlan(host) {
     k.className = "plan-k";
     k.textContent = (s.status || "todo").toUpperCase();
     line.appendChild(k);
-    line.appendChild(document.createTextNode(s.do || "Step"));
+    line.appendChild(document.createTextNode((s.method ? s.method + " · " : "") + (s.do || "Step")));
     wrap.appendChild(line);
   });
   if (check) {
@@ -1068,26 +1075,46 @@ async function runPlanStep(host) {
   const step = plan.steps[plan.cursor];
   if (!step) return;
   if (!step.cmd) {
-    setBusy(true, "Emit command");
+    setBusy(true, step.method === "say" ? "Answering" : "Writing the command");
     try {
       const r = await fetch("/api/emit", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ step: step }),
+        body: JSON.stringify({ step: step, plan: plan }),
       });
       const d = await r.json();
-      if (d.emit && d.emit.cmd) {
-        step.cmd = d.emit.cmd;
+      if (!r.ok) throw new Error(d.error || "emit failed");
+      if (d.context) renderContext(d.context);
+      if (d.plan) plan = d.plan;
+      if (d.say) {
+        const box = addMsg("bot", d.say);
+        dress(box, d.say);
+        note("loop", d.say);
+      }
+      if (d.done) {
+        plan = null;
+        check = null;
+        renderPlan(host);
+        setHold("Done. Waiting for the next instruction.");
+        return;
+      }
+      const nxt = plan && plan.steps && plan.steps[plan.cursor];
+      if (nxt && nxt.cmd) {
         note("plan", planText(plan));
         renderPlan(host);
         return;
       }
-      addMsg("bot", (d.emit && d.emit.ask) || "This step has no command yet, and state does not have what it needs.");
+      if (d.emit && d.emit.ask) {
+        addMsg("bot", d.emit.ask);
+        renderPlan(host);
+        return;
+      }
+      if (nxt && !nxt.cmd && nxt.method === "say") return runPlanStep(host);
+      renderPlan(host);
       return;
     } finally {
       setBusy(false);
     }
-    return;
   }
   host.querySelectorAll(".plan .rowbtns").forEach(function (n) {
     n.remove();
@@ -1138,11 +1165,27 @@ async function turn() {
   renderFiles();
   fitInput();
   addMsg("user", text);
-  return enqueueLlm(turnKey, "Thinking", async function () {
+  return enqueueLlm(turnKey, "Setting the goal", async function () {
   const ac = new AbortController();
   const timer = setTimeout(function () {
     ac.abort();
   }, 120000);
+  let watch = true;
+  const poll = setInterval(function () {
+    fetch("/api/state")
+      .then(function (r) { return r.json(); })
+      .then(function (s) {
+        if (!watch || !s) return;
+        const ctx = String(s.context || "");
+        renderContext(ctx);
+        if (/^METHOD: plan/m.test(ctx) && !/^SLOT /m.test(ctx)) setBusy(true, "Planning");
+        else if (/^METHOD: cmd/m.test(ctx)) setBusy(true, "Writing the command");
+        else if (/^METHOD: say/m.test(ctx)) setBusy(true, "Answering");
+        else if (/^METHOD: ask/m.test(ctx)) setBusy(true, "Asking");
+        else if (/^GOAL:/m.test(ctx)) setBusy(true, "Choosing a method");
+      })
+      .catch(function () {});
+  }, 400);
   try {
     const r = await fetch("/api/turn", {
       method: "POST",
@@ -1161,26 +1204,28 @@ async function turn() {
     showReason(pending.div, data.reason);
     renderContext(data.context);
     updateBudget();
-    if (data.mode === "A") {
-      plan = null;
-      check = null;
-      pendingA = { display: data.display, userText: text, cmd: data.cmd, result: null };
-      renderPending(pending.div);
-    } else if (!data.plan || !data.plan.steps || !data.plan.steps.length) {
-      plan = null;
-      pending.body.textContent = spoken;
-    } else {
+    if (data.plan && data.plan.steps && data.plan.steps.length) {
       pendingA = null;
       plan = data.plan;
       check = null;
       note("plan", planText(plan));
       renderPlan(pending.div);
+    } else if (data.mode === "A") {
+      plan = null;
+      check = null;
+      pendingA = { display: data.display, userText: text, cmd: data.cmd, result: null };
+      renderPending(pending.div);
+    } else {
+      plan = null;
+      pending.body.textContent = spoken;
     }
     dress(pending, spoken);
   } catch (e) {
     addMsg("err", e.name === "AbortError" ? "Timed out after 120s (Ollama busy or model not loaded)" : e.message);
   } finally {
     clearTimeout(timer);
+    watch = false;
+    clearInterval(poll);
     setBusy(false);
   }
   });

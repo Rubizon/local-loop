@@ -157,23 +157,35 @@ async function ollamaText(system, user, numPredict = 280) {
 }
 
 async function ollamaOnce(system, user, numPredict = 280) {
-  const res = await fetch(`${OLLAMA_HOST}/api/chat`, {
+  const payload = {
+    model: OLLAMA_MODEL,
+    stream: false,
+    think: false,
+    options: { temperature: 0.7, top_p: 0.8, top_k: 20, num_ctx: NUM_CTX, num_predict: numPredict },
+    messages: [
+      { role: "system", content: system },
+      { role: "user", content: user },
+    ],
+  };
+  let res = await fetch(`${OLLAMA_HOST}/api/chat`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model: OLLAMA_MODEL,
-      stream: false,
-      options: { temperature: 0.1, num_ctx: NUM_CTX, num_predict: numPredict },
-      messages: [
-        { role: "system", content: system },
-        { role: "user", content: user },
-      ],
-    }),
+    body: JSON.stringify(payload),
   });
-  const body = await res.text();
+  let body = await res.text();
+  if (!res.ok && /think/i.test(body)) {
+    delete payload.think;
+    res = await fetch(`${OLLAMA_HOST}/api/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    body = await res.text();
+  }
   if (!res.ok) throw new Error(`Ollama HTTP ${res.status}: ${body}`);
   const data = JSON.parse(body);
-  return String((data.message && data.message.content) || "").trim();
+  const message = data.message || {};
+  return lib.stripThink ? lib.stripThink(message.content || "") : String(message.content || "").trim();
 }
 
 app.post("/api/drop", (req, res) => {
@@ -325,8 +337,9 @@ app.post("/api/markup", async (req, res) => {
 });
 
 function reply(decided, context) {
-  let next = context;
-  if (!decided.cmd && !decided.plan && !decided.warning && lib.hasGoal(context)) {
+  let next = decided && decided.context ? decided.context : context;
+  if (decided && decided.context) saveContext(next);
+  else if (decided && !decided.cmd && !decided.plan && !decided.warning && lib.hasGoal(context)) {
     next = lib.rememberAnswer(context, decided.display);
     if (next !== context) saveContext(next);
   }
@@ -347,58 +360,45 @@ app.post("/api/turn", async (req, res) => {
     const text = String((req.body && req.body.text) || "").trim();
     if (!text) return res.status(400).json({ error: "empty text" });
     const context = loadContext();
-    const decided = lib.localTurn(text, context);
-    if (!decided.needsModel) {
-      if (decided.plan) {
+    const fast = lib.localTurn(text, context);
+    const waiting = lib.parseBoard(context);
+    if (!fast.needsModel && !(waiting.method === "ask" && waiting.ask)) {
+      const board = lib.writeBoard({
+        goal: String((fast.plan && fast.plan.goal) || fast.display || text).replace(/^(?:KEEP\s+)?GOAL:\s*/i, "").replace(/^Plan:\s*/i, ""),
+        method: fast.plan && fast.plan.steps && fast.plan.steps.length > 1 ? "plan" : fast.cmd ? "cmd" : fast.warning ? "ask" : "say",
+        cursor: fast.plan && fast.plan.steps && fast.plan.steps[0] ? fast.plan.steps[0].id : "",
+        slots: waiting.slots,
+      });
+      if (fast.plan) {
         ledger = [];
         lastGoodStep = null;
       }
-      return res.json(reply(decided, context));
+      return res.json(reply({ ...fast, context: board }, context));
     }
-    const rawFirst = await ollamaText(
-      lib.SYSTEM_THINK,
-      "User:\n" + lib.clip(text, 2000) + "\n\nState:\n" + (context || "(empty)"),
-      700
-    );
-    let thought = lib.parseThink(rawFirst, text);
-    if (thought.failed || lib.thinAnswer(thought) || lib.copiedFromPrompt(text, thought)) {
-      const rawAgain = await ollamaText(
-        lib.SYSTEM_THINK,
-        "User:\n" + lib.clip(text, 2000) + "\n\nAnswer this user only. Finish the JSON. Do not repeat an example. Do not name a file they did not name.\n\nState:\n" + (context || "(empty)"),
-        700
-      );
-      const again = lib.parseThink(rawAgain, text);
-      if (!again.failed && again.display && !lib.thinAnswer(again) && !lib.copiedFromPrompt(text, again)) thought = again;
-    }
-    const settled = lib.settle(text, thought);
-    if (settled.plan && settled.plan.steps && settled.plan.steps.length && settled.plan.steps[0].cmd) {
+    const outcome = await lib.runBeats(text, context, function (kind, user) {
+      return ollamaText(lib.PROMPTS[kind] || lib.PROMPTS.say, user, lib.PREDICT[kind] || 160);
+    }, saveContext);
+    if (outcome.cmd) {
       try {
-        lib.assertSafeCmd(settled.plan.steps[0].cmd);
+        lib.assertSafeCmd(outcome.cmd);
       } catch (err) {
         return res.json(reply({
           mode: "A",
           why: "model",
-          reason: settled.reason,
+          reason: outcome.reason,
           display: String(err.message || err),
           cmd: null,
           plan: null,
           warning: { sign: "I am unsure what I am doing here.", why: "That command is not safe to run." },
+          context: outcome.context,
         }, context));
       }
     }
-    if (settled.plan && !settled.warning) {
+    if (outcome.plan) {
       ledger = [];
       lastGoodStep = null;
     }
-    return res.json(reply({
-      mode: settled.plan && !settled.warning ? "B" : "A",
-      why: "model",
-      reason: settled.reason,
-      display: settled.display || (settled.warning ? settled.warning.sign : "I could not decide."),
-      cmd: settled.cmd,
-      plan: settled.plan,
-      warning: settled.warning,
-    }, context));
+    return res.json(reply(outcome, context));
   } catch (err) {
     res.status(500).json({ error: String(err.message || err) });
   }
@@ -592,8 +592,46 @@ app.post("/api/apply", async (req, res) => {
 app.post("/api/emit", async (req, res) => {
   try {
     const step = req.body && req.body.step;
+    const posted = req.body && req.body.plan;
     if (!step) return res.status(400).json({ error: "no step" });
     const context = loadContext();
+    if (step.method) {
+      const filled = await lib.fillStep(step, context, function (kind, user) {
+        return ollamaText(lib.PROMPTS[kind] || lib.PROMPTS.say, user, lib.PREDICT[kind] || 160);
+      });
+      let plan = posted;
+      if (plan && Array.isArray(plan.steps)) {
+        plan = {
+          ...plan,
+          steps: plan.steps.map((item) => {
+            if (item.id !== step.id) return item;
+            if (filled.say) return { ...item, status: "ok" };
+            if (filled.cmd) return { ...item, cmd: filled.cmd };
+            return item;
+          }),
+        };
+        if (filled.say) {
+          const index = plan.steps.findIndex((item) => item.id === step.id);
+          plan.cursor = Math.min(index + 1, plan.steps.length);
+          const next = plan.steps[plan.cursor];
+          if (next && next.method === "cmd" && !next.cmd) {
+            const again = await lib.fillStep(next, filled.context || context, function (kind, user) {
+              return ollamaText(lib.PROMPTS[kind] || lib.PROMPTS.cmd, user, lib.PREDICT[kind] || 220);
+            });
+            if (again.cmd) plan.steps[plan.cursor] = { ...next, cmd: again.cmd };
+          }
+        }
+      }
+      if (filled.context) saveContext(filled.context);
+      const done = plan && plan.steps && plan.steps.every((item) => item.status === "ok");
+      return res.json({
+        say: filled.say || "",
+        emit: { cmd: filled.cmd || null, ask: filled.ask || null },
+        plan: plan || null,
+        context: filled.context || context,
+        done: !!done,
+      });
+    }
     const simple = lib.heuristicEmit(step, context);
     if (simple) return res.json({ emit: simple });
     try {
@@ -688,7 +726,7 @@ app.post("/api/check", async (req, res) => {
         reportText = "";
       }
     }
-    if (check.ok && plan && plan.fromModel && !listing) {
+    if (check.ok && plan && plan.fromModel && !listing && !(step && step.method)) {
       try {
         const evidence = reportText || lib.clip(produced, 900);
         const judged = evidence.trim() ? await modelJudge(plan.ask || plan.goal || (step && step.do) || "", step, evidence) : null;
@@ -709,7 +747,18 @@ app.post("/api/check", async (req, res) => {
       };
     }
     const stateResult = reportText ? { ...(result || {}), stdout: summary } : result;
-    check.context = lib.stepState(stamped, step, stateResult, check.ok, context);
+    if (step.method === "cmd") {
+      const board = lib.parseBoard(context);
+      if (!board.goal) board.goal = String(plan.goal || "").replace(/^(?:KEEP\s+)?GOAL:\s*/i, "");
+      board.method = board.method || "plan";
+      if (step.out) board.slots[step.out] = lib.digestResult(result && result.cmd, result);
+      const index = (plan.steps || []).findIndex((item) => item.id === step.id);
+      const upcoming = (plan.steps || [])[index + 1];
+      board.cursor = check.ok ? (upcoming ? upcoming.id : "done") : step.id;
+      check.context = lib.writeBoard(board);
+    } else {
+      check.context = lib.stepState(stamped, step, stateResult, check.ok, context);
+    }
     let nextPlan = lib.mark(stamped, step.id, check.ok ? "ok" : check.ask ? "ask" : "fail");
     if (check.startOver) {
       ledger = lib.rollbackAfter(ledger, null);

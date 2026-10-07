@@ -4,7 +4,7 @@ const { spawn } = require("child_process");
 
 const CONTEXT_MAX_CHARS = 1600;
 const CONTEXT_MAX_LINES = 12;
-const NUM_CTX = Number(process.env.OLLAMA_NUM_CTX || 8192);
+const NUM_CTX = Number(process.env.OLLAMA_NUM_CTX || 4096);
 const DENY_CMD = /(\bsudo\b|\brm\s+-rf\s+\/|\bmkfs\b|\bdd\s+if=|\bchmod\s+-R\s+777|\bchown\s+-R\s+|\bcurl\b[^|&;]*\|\s*(sh|bash)|:\(\)\s*\{)/i;
 
 const SYSTEM_A = `Output one JSON object and nothing else. The first character is {.
@@ -143,7 +143,7 @@ function clip(s, n) {
 }
 
 function hasGoal(text) {
-  return /KEEP\s+GOAL:/i.test(String(text || ""));
+  return /^(?:KEEP\s+)?GOAL:/im.test(String(text || ""));
 }
 
 function keepLines(text) {
@@ -1066,6 +1066,10 @@ function judge(step, result, probe) {
   const stdout = String((result && result.stdout) || "");
   const stderr = String((result && result.stderr) || "").trim();
   const failed = !result || result.code !== 0;
+  if (step && step.method === "cmd") {
+    if (failed) return { ok: false, why: stderr || "command failed", summary: "" };
+    return { ok: true, why: "command finished", summary: summarizeOutput((result && result.cmd) || "", stdout) };
+  }
   const about = String((step && step.expect) || "") + " " + String((step && step.do) || "");
   const wantsPdf = /pdf/i.test(about);
   const wantsList = !wantsPdf && listingCommand(result && result.cmd);
@@ -2487,3 +2491,5 @@ module.exports = {
   WORKFLOW_PROBES,
   runUnitTests,
 };
+
+Object.assign(module.exports, require("./flow"));

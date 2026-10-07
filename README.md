@@ -25,28 +25,26 @@ A whole tree is a scan, not one prompt full of source. Ask it to read a director
 
 ## How a turn works
 
-1. You send a message. Dropping a file stores it in the working directory and pastes the path.
-2. The model gets State plus that message. It answers with one JSON object: a sentence for you, and an optional command.
-3. **Reasoning** is the model's own line about why. It is not State.
-4. The sentence you read is then formatted in a second call (paragraphs, lists, a code box with **Copy**). **Raw** shows the original. If the two are the same, there is no toggle.
-5. If the model is guessing — a file you did not name, a cut-off reply, Python requested but `cat` returned — a gold bar says **I am unsure what I am doing here.** That command is not offered.
-6. If there is a command, the plan box shows the full text and **Approve**. **Skip** leaves State unchanged. An older Approve button cannot be pressed again.
-7. The command runs in the working directory, which starts as a new folder under `/tmp`. Stdin is closed. No output for 8 seconds, or 20 seconds in total, and the process is killed (`exit 124`).
-8. The output is folded into State. A long file is summarized in chunks. You can watch the notes appear in the panel while that happens.
-9. A failed step rolls back files that step created or edited in the working directory. A new file whose path appeared in the command is removed too, when that path is under `/tmp`, your home directory, or this project. It does not undo every side effect.
-10. **Clear** wipes the chat, State, and the working directory. The next turn starts in a new `/tmp/loop-…` folder.
+The model does not see the chat. It sees one small frame at a time. Thinking is turned off. Each call is capped (`goal` 48 tokens, `method` 24, `say` 160, `ask` 64, `cmd` 220, `plan` 240). The context window defaults to 4096 (`OLLAMA_NUM_CTX`).
 
-State lines you will see:
+1. You send a message. The state panel updates as soon as each beat finishes. You do not have to approve those updates. A fully specified command, such as listing a directory or writing text you already gave, skips the model and still shows the goal and the method.
+2. **Goal.** One line: the outcome, not the steps. A follow-up keeps the old goal. A new job replaces it.
+3. **Method.** One of `say` (just answer), `ask` (a question), `cmd` (one shell command), or `plan` (several steps).
+4. **Do that and nothing else.** A plan is a list of steps. Each step names the slots it reads (`need`) and the slot it writes (`out`). A step does not receive the chat or the other slots.
+5. A `say` step runs immediately and its text is both the bubble and the slot. A `cmd` step shows the full command, including more than one line, and waits. **Approve** is still required. Nothing is executed before that.
+6. After a command exits 0, the slot stores a short digest (or `file written` when the command only redirected). The next step then starts. Empty output is not a failed summary.
+7. An `ask` waits for your next message. That message is the answer slot, not a new goal.
+8. **Clear** wipes the chat, State, and the working directory.
+
+State lines:
 
 | Line | Meaning |
 |---|---|
-| `KEEP GOAL` | The task. Stays until you clear or ask to drop it |
-| `FACT` | A short result worth keeping |
-| `NEXT` | What the next step needs |
-| `DONE` | Steps that finished |
-| `NOTE` | A chunk summary while a long file is being read |
-
-The panel is capped at about 12 lines. The model does not receive the rest of the chat to make up for that.
+| `GOAL` | The outcome |
+| `METHOD` | `say`, `ask`, `cmd`, or `plan` |
+| `CURSOR` | The step id now running |
+| `ASK` | The question waiting on you |
+| `SLOT name` | A short value passed into a later step |
 
 ## Start
 
@@ -73,7 +71,7 @@ PORT=4000 bash run.sh qwen3:4b-instruct
 - **Test model** runs the built-in checks and downloads a report. It tells you if this model can keep the JSON the loop needs. It does not prove the model can do your task.
 - **Export** downloads the chat, the steps, and State as text, so a failure can be pasted somewhere else and read.
 - **Clear** starts over.
-- The meter under the box is a rough token count of State plus what you are typing, against the context window (8192 unless `OLLAMA_NUM_CTX` is set).
+- The meter under the box is a rough token count of State plus what you are typing, against the context window (4096 unless `OLLAMA_NUM_CTX` is set).
 
 ## Checks
 
