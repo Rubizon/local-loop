@@ -1,8 +1,13 @@
 "use strict";
 
-const PREDICT = { goal: 48, method: 24, say: 160, ask: 64, cmd: 220, plan: 240, replan: 240 };
+const PREDICT = { think: 160, goal: 48, method: 24, say: 160, ask: 64, cmd: 220, plan: 240, replan: 240 };
 
 const PROMPTS = {
+  think: `Think, then one JSON object. The first character of the answer is {.
+{"note":"one sentence"}
+You are on the user's PC. The note is the decision, not the reasoning.
+Say what is needed, and whether the next step is say, ask, cmd, or plan.
+Use only the lines below. Do not write a command.`,
   goal: `One JSON object. The first character is {.
 {"goal":"one line"}
 The goal is the outcome, not the steps.
@@ -92,17 +97,19 @@ function normMethod(value) {
 }
 
 function parseBoard(text) {
-  const board = { goal: "", method: "", cursor: "", ask: "", slots: {} };
+  const board = { goal: "", method: "", cursor: "", ask: "", think: "", slots: {} };
   String(text || "").split("\n").forEach((line) => {
     const goal = line.match(/^(?:KEEP\s+)?GOAL:\s*(.*)$/i);
     const method = line.match(/^METHOD:\s*(.*)$/i);
     const cursor = line.match(/^CURSOR:\s*(.*)$/i);
     const ask = line.match(/^ASK:\s*(.*)$/i);
+    const thought = line.match(/^THINK:\s*(.*)$/i);
     const slot = line.match(/^SLOT\s+([A-Za-z0-9_]+):\s*(.*)$/);
     if (goal) board.goal = goal[1].trim();
     else if (method) board.method = normMethod(method[1]) || method[1].trim();
     else if (cursor) board.cursor = cursor[1].trim();
     else if (ask) board.ask = ask[1].trim();
+    else if (thought) board.think = thought[1].trim();
     else if (slot) board.slots[slot[1]] = slot[2].trim();
   });
   return board;
@@ -111,6 +118,7 @@ function parseBoard(text) {
 function writeBoard(board) {
   const lines = [];
   if (board.goal) lines.push("GOAL: " + clip(board.goal, 180));
+  if (board.think) lines.push("THINK: " + clip(board.think, 160));
   if (board.method) lines.push("METHOD: " + board.method);
   if (board.cursor) lines.push("CURSOR: " + board.cursor);
   if (board.ask) lines.push("ASK: " + clip(board.ask, 180));
@@ -123,6 +131,7 @@ function writeBoard(board) {
 
 function frameFor(step, board) {
   const lines = ["GOAL: " + (board.goal || "")];
+  if (board.think) lines.push("THINK: " + board.think);
   lines.push("DO: " + (step.do || ""));
   (step.need || []).forEach((name) => {
     const value = board.slots && board.slots[name];
@@ -204,6 +213,28 @@ function echoed(user, value) {
   return left.indexOf(right) !== -1 || right.indexOf(left.slice(0, 40)) !== -1;
 }
 
+function brief(user, board) {
+  const lines = [];
+  if (board && board.goal) lines.push("GOAL: " + clip(board.goal, 160));
+  if (board && board.think) lines.push("THINK: " + clip(board.think, 160));
+  const slots = (board && board.slots) || {};
+  Object.keys(slots).slice(0, 3).forEach((key) => {
+    const value = String(slots[key] || "").trim();
+    if (value) lines.push("SLOT " + key + ": " + clip(value, 100));
+  });
+  lines.push("User: " + clip(user, 360));
+  return lines.join("\n");
+}
+
+function thinkNote(raw) {
+  const note = field(raw, "note");
+  if (note && !/^one sentence\.?$/i.test(note)) return clip(note, 160);
+  const text = stripThink(raw).replace(/\s+/g, " ").trim();
+  if (!text || text === "{}" || text.startsWith("{")) return "";
+  const parts = text.split(/(?<=[.!?])\s+/).filter(Boolean);
+  return clip(parts[parts.length - 1] || text, 160);
+}
+
 function beatReason(method, steps) {
   if (method === "ask") return "A fact is missing, so this waits for you.";
   if (method === "cmd") return "One command. Nothing runs until you approve.";
@@ -227,9 +258,13 @@ async function runBeats(text, stateText, callModel, onState) {
     user = "GOAL: " + prior.goal + "\nThe user answered: " + slots.answer;
     goalHint = prior.goal;
   }
-  const goalRaw = await call(callModel, "goal", "User:\n" + clip(user, 800) + (goalHint ? "\n\nOld goal:\n" + goalHint : ""));
+  const thinkRaw = await call(callModel, "think", brief(user, { goal: goalHint, slots: slots }));
+  const thought = thinkNote(thinkRaw);
+  let board = { goal: goalHint, method: "", cursor: "", ask: "", think: thought, slots: slots };
+  if (thought) show(writeBoard(board));
+  const goalRaw = await call(callModel, "goal", brief(user, board));
   const goal = field(goalRaw, "goal") || goalHint || clip(text, 140);
-  let board = { goal: goal, method: "", cursor: "", ask: "", slots: slots };
+  board.goal = goal;
   show(writeBoard(board));
   const methodRaw = await call(callModel, "method", "GOAL: " + goal);
   let method = normMethod(field(methodRaw, "method")) || "say";
@@ -239,14 +274,14 @@ async function runBeats(text, stateText, callModel, onState) {
   if (method === "say") {
     const raw = await call(callModel, "say", frameFor({ do: goal, need: Object.keys(slots) }, board));
     const spoken = field(raw, "text") || field(raw, "display") || "I could not answer that.";
-    return { mode: "A", why: "say", reason: beatReason("say"), display: spoken, cmd: null, plan: null, context: writeBoard(board) };
+    return { mode: "A", why: "say", reason: thought || beatReason("say"), display: spoken, cmd: null, plan: null, context: writeBoard(board) };
   }
   if (method === "ask") {
     const raw = await call(callModel, "ask", "GOAL: " + goal);
     const ask = field(raw, "ask") || "What is missing?";
     board.ask = ask;
     show(writeBoard(board));
-    return { mode: "A", why: "ask", reason: beatReason("ask"), display: ask, cmd: null, plan: null, context: writeBoard(board) };
+    return { mode: "A", why: "ask", reason: thought || beatReason("ask"), display: ask, cmd: null, plan: null, context: writeBoard(board) };
   }
   if (method === "cmd") {
     const raw = await call(callModel, "cmd", frameFor({ do: goal, need: Object.keys(slots) }, board));
@@ -260,7 +295,7 @@ async function runBeats(text, stateText, callModel, onState) {
     };
     board.cursor = "A";
     show(writeBoard(board));
-    return { mode: "B", why: "cmd", reason: beatReason("cmd"), display: goal, cmd: cmd, plan: plan, context: writeBoard(board) };
+    return { mode: "B", why: "cmd", reason: thought || beatReason("cmd"), display: goal, cmd: cmd, plan: plan, context: writeBoard(board) };
   }
   const planRaw = await call(callModel, "plan", "GOAL: " + goal + "\nUser:\n" + clip(text, 400));
   let steps = parsePlanSteps(planRaw);
@@ -294,12 +329,12 @@ async function runBeats(text, stateText, callModel, onState) {
   const plan = { goal: "GOAL: " + goal, ask: goal, cursor: cursor, fromModel: true, steps: steps };
   if (!steps[cursor]) {
     board.cursor = "done";
-    return { mode: "A", why: "plan", reason: beatReason("plan", steps), display: said.join("\n\n") || goal, cmd: null, plan: null, context: writeBoard(board) };
+    return { mode: "A", why: "plan", reason: thought || beatReason("plan", steps), display: said.join("\n\n") || goal, cmd: null, plan: null, context: writeBoard(board) };
   }
   if (steps[cursor].method === "ask") {
     board.ask = steps[cursor].do;
     show(writeBoard(board));
-    return { mode: "A", why: "ask", reason: beatReason("ask"), display: steps[cursor].do, cmd: null, plan: plan, context: writeBoard(board) };
+    return { mode: "A", why: "ask", reason: thought || beatReason("ask"), display: steps[cursor].do, cmd: null, plan: plan, context: writeBoard(board) };
   }
   if (composeThenStore(text) && steps[cursor].method === "cmd" && !steps[cursor].cmd) {
     return {
@@ -316,7 +351,7 @@ async function runBeats(text, stateText, callModel, onState) {
   return {
     mode: "B",
     why: "plan",
-    reason: beatReason("plan", steps),
+    reason: thought || beatReason("plan", steps),
     display: said.join("\n\n") || goal,
     cmd: steps[cursor].cmd || null,
     plan: plan,
@@ -340,6 +375,7 @@ async function fillStep(step, stateText, callModel) {
 
 async function selfCheckBeats() {
   const canned = {
+    think: '{"note":"Produce the list, then store it."}',
     goal: '{"goal":"foo.txt contains the weekdays"}',
     method: '{"method":"plan"}',
     plan: '{"steps":[{"id":"A","method":"say","do":"name Monday through Friday","need":[],"out":"days"},{"id":"B","method":"cmd","do":"write $days into foo.txt","need":["days"],"out":"path"}]}',
@@ -354,7 +390,7 @@ async function selfCheckBeats() {
     (board) => seen.push(board)
   );
   const checks = [
-    ["goal shown first", /GOAL: foo\.txt contains the weekdays/.test(seen[0] || "")],
+    ["think is shown before the goal", /THINK: Produce the list/.test(seen[0] || "") && seen.some((board) => /GOAL: foo\.txt contains the weekdays/.test(board))],
     ["method shown before the command", seen.some((board) => /METHOD: plan/.test(board) && !/cmd:/.test(board))],
     ["slot is the weekday list", seen.some((board) => /SLOT days: Monday/.test(board))],
     ["say text is shown", /Monday, Tuesday/.test(out.display || "")],

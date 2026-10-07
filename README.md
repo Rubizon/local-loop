@@ -25,22 +25,24 @@ A whole tree is a scan, not one prompt full of source. Ask it to read a director
 
 ## How a turn works
 
-The model does not see the chat. It sees one small frame at a time. Thinking is turned off. Each call is capped (`goal` 48 tokens, `method` 24, `say` 160, `ask` 64, `cmd` 220, `plan` 240). The context window is whatever Ollama has given that model. The server reads it from the running model, or from `num_ctx` in the Modelfile. It does not set one of its own.
+The model does not see the chat. It sees one small frame at a time. One call may think, on that summary only, and only one sentence of it is kept (`THINK`). The later calls do not think. Each call is capped (`think` 160 tokens, `goal` 48, `method` 24, `say` 160, `ask` 64, `cmd` 220, `plan` 240). The context window is whatever Ollama has given that model. The server reads it from the running model, or from `num_ctx` in the Modelfile. It does not set one of its own.
 
 1. You send a message. The state panel updates as soon as each beat finishes. You do not have to approve those updates. A fully specified command, such as listing a directory or writing text you already gave, skips the model and still shows the goal and the method.
-2. **Goal.** One line: the outcome, not the steps. A follow-up keeps the old goal. A new job replaces it.
-3. **Method.** One of `say` (just answer), `ask` (a question), `cmd` (one shell command), or `plan` (several steps).
-4. **Do that and nothing else.** A plan is a list of steps. Each step names the slots it reads (`need`) and the slot it writes (`out`). A step does not receive the chat or the other slots.
-5. A `say` step runs immediately and its text is both the bubble and the slot. A `cmd` step shows the full command, including more than one line, and waits. **Approve** is still required. Nothing is executed before that.
-6. After a command exits 0, the slot stores a short digest (or `file written` when the command only redirected). The next step then starts. Empty output is not a failed summary.
-7. An `ask` waits for your next message. That message is the answer slot, not a new goal.
-8. **Clear** wipes the chat, State, and the working directory.
+2. **Think.** The model thinks on the goal, at most three slots, and your message. The answer is one sentence. The reasoning itself is not stored.
+3. **Goal.** One line: the outcome, not the steps. A follow-up keeps the old goal. A new job replaces it.
+4. **Method.** One of `say` (just answer), `ask` (a question), `cmd` (one shell command), or `plan` (several steps).
+5. **Do that and nothing else.** A plan is a list of steps. Each step names the slots it reads (`need`) and the slot it writes (`out`). A step does not receive the chat or the other slots.
+6. A `say` step runs immediately and its text is both the bubble and the slot. A `cmd` step shows the full command, including more than one line, and waits. **Approve** is still required. Nothing is executed before that.
+7. After a command exits 0, the slot stores a short digest (or `file written` when the command only redirected). The next step then starts. Empty output is not a failed summary.
+8. An `ask` waits for your next message. That message is the answer slot, not a new goal.
+9. **Clear** wipes the chat, State, and the working directory.
 
 State lines:
 
 | Line | Meaning |
 |---|---|
 | `GOAL` | The outcome |
+| `THINK` | One sentence from the thinking step. The reasoning is not kept |
 | `METHOD` | `say`, `ask`, `cmd`, or `plan` |
 | `CURSOR` | The step id now running |
 | `ASK` | The question waiting on you |

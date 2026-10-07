@@ -147,8 +147,8 @@ async function modelJudge(task, step, evidence) {
 }
 
 let llmTail = Promise.resolve();
-async function ollamaText(system, user, numPredict = 280) {
-  const run = llmTail.then(function () { return ollamaOnce(system, user, numPredict); });
+async function ollamaText(system, user, numPredict = 280, wantThink = false) {
+  const run = llmTail.then(function () { return ollamaOnce(system, user, numPredict, wantThink); });
   llmTail = run.then(function () {}, function () {});
   return run;
 }
@@ -212,37 +212,42 @@ async function detectContext() {
   return picked.tokens;
 }
 
-async function ollamaOnce(system, user, numPredict = 280) {
+async function ollamaOnce(system, user, numPredict = 280, wantThink = false) {
   await ensureContext();
-  const payload = {
-    model: OLLAMA_MODEL,
-    stream: false,
-    think: false,
-    options: { temperature: 0.7, top_p: 0.8, top_k: 20, num_predict: numPredict },
-    messages: [
-      { role: "system", content: system },
-      { role: "user", content: user },
-    ],
-  };
-  let res = await fetch(`${OLLAMA_HOST}/api/chat`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
-  let body = await res.text();
-  if (!res.ok && /think/i.test(body)) {
-    delete payload.think;
-    res = await fetch(`${OLLAMA_HOST}/api/chat`, {
+  const levels = wantThink ? ["low", true, false] : [false];
+  let lastBody = "";
+  let lastStatus = 0;
+  for (let i = 0; i < levels.length; i++) {
+    const payload = {
+      model: OLLAMA_MODEL,
+      stream: false,
+      think: levels[i],
+      options: { temperature: 0.7, top_p: 0.8, top_k: 20, num_predict: numPredict },
+      messages: [
+        { role: "system", content: system },
+        { role: "user", content: user },
+      ],
+    };
+    const res = await fetch(`${OLLAMA_HOST}/api/chat`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
-    body = await res.text();
+    const body = await res.text();
+    if (!res.ok && wantThink && i < levels.length - 1 && /think/i.test(body)) continue;
+    if (!res.ok) throw new Error(`Ollama HTTP ${res.status}: ${body}`);
+    lastStatus = res.status;
+    lastBody = body;
+    const data = JSON.parse(body);
+    const message = data.message || {};
+    const content = String(message.content || "").trim();
+    if (!wantThink) return lib.stripThink(content);
+    const answer = lib.stripThink(content);
+    if (answer) return answer;
+    const thinking = String(message.thinking || "").trim();
+    return thinking ? thinking.slice(-600) : "";
   }
-  if (!res.ok) throw new Error(`Ollama HTTP ${res.status}: ${body}`);
-  const data = JSON.parse(body);
-  const message = data.message || {};
-  return lib.stripThink ? lib.stripThink(message.content || "") : String(message.content || "").trim();
+  throw new Error(`Ollama HTTP ${lastStatus}: ${lastBody}`);
 }
 
 app.post("/api/drop", (req, res) => {
@@ -433,7 +438,7 @@ app.post("/api/turn", async (req, res) => {
       return res.json(reply({ ...fast, context: board }, context));
     }
     const outcome = await lib.runBeats(text, context, function (kind, user) {
-      return ollamaText(lib.PROMPTS[kind] || lib.PROMPTS.say, user, lib.PREDICT[kind] || 160);
+      return ollamaText(lib.PROMPTS[kind] || lib.PROMPTS.say, user, lib.PREDICT[kind] || 160, kind === "think");
     }, saveContext);
     if (outcome.cmd) {
       try {
@@ -654,7 +659,7 @@ app.post("/api/emit", async (req, res) => {
     const context = loadContext();
     if (step.method) {
       const filled = await lib.fillStep(step, context, function (kind, user) {
-        return ollamaText(lib.PROMPTS[kind] || lib.PROMPTS.say, user, lib.PREDICT[kind] || 160);
+        return ollamaText(lib.PROMPTS[kind] || lib.PROMPTS.say, user, lib.PREDICT[kind] || 160, kind === "think");
       });
       let plan = posted;
       if (plan && Array.isArray(plan.steps)) {
