@@ -3,11 +3,10 @@
 const PREDICT = { think: 160, goal: 48, method: 24, say: 160, ask: 64, cmd: 220, plan: 240, replan: 240 };
 
 const PROMPTS = {
-  think: `Think, then one JSON object. The first character of the answer is {.
+  think: `One JSON object. The first character is {.
 {"note":"one sentence"}
-You are on the user's PC. The note is the decision, not the reasoning.
-Say what is needed, and whether the next step is say, ask, cmd, or plan.
-Use only the lines below. Do not write a command.`,
+Name the fact this PC must print. The command that prints it has to exit.
+Do not copy these instructions. Do not write a command.`,
   goal: `One JSON object. The first character is {.
 {"goal":"one line"}
 The goal is the outcome, not the steps.
@@ -29,8 +28,9 @@ Ask only for the missing fact.`,
   cmd: `One JSON object. The first character is {.
 {"cmd":"one shell command"}
 You are on the user's PC. The command has not run.
-Use only GOAL and IN. Do not invent file contents.
-A command may span lines.`,
+It prints the quantity the question asks for, then it exits.
+Do not use watch, top, or follow mode. Use only GOAL and IN.
+Do not invent file contents. A command may span lines.`,
   plan: `One JSON object. The first character is {.
 {"steps":[{"id":"A","method":"say","do":"what this step does","need":[],"out":"name"}]}
 At most 4 steps. method is say, ask, or cmd.
@@ -38,7 +38,8 @@ need is the slot names this step reads. out is the slot it writes.
 Do not include a command. Do not do the work in this reply.`,
   replan: `One JSON object. The first character is {.
 {"steps":[{"id":"A","method":"cmd","do":"what","need":[],"out":"name"}]}
-Replace only the failed step and what follows. At most 3 steps. Do not repeat a step that already worked.`,
+Replace only the failed step and what follows. At most 3 steps.
+The new command must print the answer and exit. Do not repeat the command that failed.`,
 };
 
 function clip(text, n) {
@@ -232,6 +233,7 @@ function plainThink(text) {
   s = s.replace(/[*_#>`]+/g, " ");
   s = s.replace(/\b(determine the next step|next step|reasoning|thought)\s*:\s*/gi, " ");
   s = s.replace(/\s+/g, " ").trim();
+  if (/json object|first character|constraint:|user question|analyze the request|these instructions/i.test(s)) return "";
   s = s.replace(/\s*\([^)]*$/, "").trim();
   s = s.replace(/[,:;]+$/, "").trim();
   if (!s || /^[{}]+$/.test(s)) return "";
@@ -403,7 +405,7 @@ async function selfCheckBeats() {
     (board) => seen.push(board)
   );
   const checks = [
-    ["a thinking outline becomes one sentence", thinkNote("**Determine the Next Step:** * I need to generate the list of weekdays (Monday,") === "I need to generate the list of weekdays."],
+    ["a copied instruction is not a thought", thinkNote('yze the Request: User Question: "Is the GPU hotter?" Constraint: "Think, then one JSON object. The first character.') === ""],
     ["think is shown before the goal", /THINK: Produce the list/.test(seen[0] || "") && seen.some((board) => /GOAL: foo\.txt contains the weekdays/.test(board))],
     ["method shown before the command", seen.some((board) => /METHOD: plan/.test(board) && !/cmd:/.test(board))],
     ["slot is the weekday list", seen.some((board) => /SLOT days: Monday/.test(board))],

@@ -89,7 +89,8 @@ Use facts already in context. Do not invent file contents you have not seen.`;
 
 const SYSTEM_REPLAN = `Revise remaining steps after a failed checkpoint. JSON only:
 {"display":"one paragraph","steps":[{"id":"1","do":"action","need":"input","expect":"one line","attach":"none|paths|summary|full","cmd":"one command or null"}]}
-Keep finished work. 1-5 remaining steps. Do not repeat done steps.`;
+Keep finished work. 1-5 remaining steps. Do not repeat done steps.
+The new command must print the answer and exit. Do not repeat the command that failed.`;
 
 const SYSTEM_THINK = `You are the model in a local app on the user's PC. One JSON object. The first character is {.
 reason is the Reasoning line. One plain sentence. Do not put the shell command in reason.
@@ -1151,6 +1152,7 @@ function judge(step, result, probe) {
   const stderr = String((result && result.stderr) || "").trim();
   const failed = !result || result.code !== 0;
   if (step && step.method === "cmd") {
+    if (result && result.killed) return { ok: false, why: "That command did not exit. It must print the answer and stop.", summary: "" };
     if (failed) return { ok: false, why: stderr || "command failed", summary: "" };
     return { ok: true, why: "command finished", summary: summarizeOutput((result && result.cmd) || "", stdout) };
   }
@@ -1372,11 +1374,31 @@ function advance(plan, next) {
   return idx >= 0 ? { ...plan, cursor: idx } : { ...plan, cursor: Math.min(plan.cursor + 1, plan.steps.length) };
 }
 
+function oneShot(cmd) {
+  let text = String(cmd || "").trim();
+  const watched = text.match(/^watch\b([\s\S]*)$/i);
+  if (watched) {
+    let rest = watched[1].trim();
+    const quoted = rest.match(/^(?:(?:-\S+\s+\S+\s+)|(?:-\S+\s+))*['"]([\s\S]+)['"]\s*$/);
+    if (quoted) rest = quoted[1];
+    else rest = rest.replace(/^(?:--?\S+(?:\s+\S+)?\s+)*/, "").replace(/^['"]|['"]$/g, "").trim();
+    text = rest.trim();
+  }
+  if (!text) return "";
+  if (/^ping\b/i.test(text) && !/(?:^|\s)-c\b/.test(text)) text = text.replace(/^ping\b/i, "ping -c 3");
+  text = text.replace(/\btail\s+-f\b/i, "tail -n 40").replace(/\bjournalctl\s+-f\b/i, "journalctl -n 40");
+  const head = (text.split(/\s*(?:&&|\|\||;|\|)\s*/)[0] || "").trim().split(/\s+/)[0].toLowerCase();
+  if (/^(top|htop|btop|less|more|watch|yes|vim|vi|nano|man)$/.test(head)) return "";
+  return text;
+}
+
 function assertSafeCmd(cmd) {
-  const s = String(cmd || "").trim();
-  if (!s) throw new Error("empty command");
-  if (DENY_CMD.test(s)) throw new Error("blocked command: " + s);
-  return s;
+  const raw = String(cmd || "").trim();
+  if (!raw) throw new Error("empty command");
+  const shot = oneShot(raw);
+  if (!shot) throw new Error("That command does not exit.");
+  if (DENY_CMD.test(shot)) throw new Error("blocked command: " + shot);
+  return shot;
 }
 
 const READ_VERBS = {
@@ -2289,6 +2311,9 @@ function runUnitTests() {
   check("only a huge output says the summary failed", reportSay("That’s done.", "", true, true, "") === "The output was too large to report in one pass, and the summary failed.");
   check("a write is not a failed listing", judge({ do: "I will generate a list of workdays and save it to the file foo.txt.", expect: "the command output" }, { cmd: "date -d 'next monday' > foo.txt", code: 0, stdout: "", stderr: "" }).ok === true);
   check("an empty listing still fails", judge({ do: "List /tmp", expect: "names" }, { cmd: "ls -la /tmp", code: 0, stdout: "", stderr: "" }).ok === false);
+  check("a monitor runs once", oneShot("watch -n 1 'nvidia-smi; lscpu | head -1'") === "nvidia-smi; lscpu | head -1");
+  check("a screen that never exits is refused", oneShot("top") === "");
+  check("ping takes one sample", oneShot("ping example.com") === "ping -c 3 example.com");
   check("multi-line command is allowed", assertSafeCmd("printf '%s\\n' Monday Tuesday > days.txt\necho done").indexOf("\n") > 0);
   check("deny sudo", (() => { try { assertSafeCmd("sudo ls"); return false; } catch (_) { return true; } })());
   const p = heuristicPlan("list /tmp then write a report");
@@ -2575,6 +2600,7 @@ module.exports = {
   currentStep,
   mark,
   advance,
+  oneShot,
   assertSafeCmd,
   safeRelPath,
   recordWrite,

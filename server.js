@@ -441,6 +441,26 @@ app.post("/api/turn", async (req, res) => {
       return ollamaText(lib.PROMPTS[kind] || lib.PROMPTS.say, user, lib.PREDICT[kind] || 160, kind === "think");
     }, saveContext);
     if (outcome.cmd) {
+      outcome.cmd = lib.oneShot(outcome.cmd);
+      if (outcome.plan && outcome.plan.steps) {
+        outcome.plan.steps.forEach((step) => {
+          if (step.cmd) step.cmd = lib.oneShot(step.cmd);
+        });
+        const current = outcome.plan.steps[outcome.plan.cursor] || outcome.plan.steps.find((step) => step.status !== "ok");
+        if (current) outcome.cmd = current.cmd || "";
+      }
+      if (!outcome.cmd) {
+        return res.json(reply({
+          mode: "A",
+          why: "model",
+          reason: outcome.reason,
+          display: "That command does not exit. It needs to print the answer and stop.",
+          cmd: null,
+          plan: null,
+          warning: { sign: "I am unsure what I am doing here.", why: "The command would keep running." },
+          context: outcome.context,
+        }, context));
+      }
       try {
         lib.assertSafeCmd(outcome.cmd);
       } catch (err) {
@@ -668,7 +688,7 @@ app.post("/api/emit", async (req, res) => {
           steps: plan.steps.map((item) => {
             if (item.id !== step.id) return item;
             if (filled.say) return { ...item, status: "ok" };
-            if (filled.cmd) return { ...item, cmd: filled.cmd };
+            if (filled.cmd) return { ...item, cmd: lib.oneShot(filled.cmd) };
             return item;
           }),
         };
@@ -680,15 +700,16 @@ app.post("/api/emit", async (req, res) => {
             const again = await lib.fillStep(next, filled.context || context, function (kind, user) {
               return ollamaText(lib.PROMPTS[kind] || lib.PROMPTS.cmd, user, lib.PREDICT[kind] || 220);
             });
-            if (again.cmd) plan.steps[plan.cursor] = { ...next, cmd: again.cmd };
+            if (again.cmd) plan.steps[plan.cursor] = { ...next, cmd: lib.oneShot(again.cmd) };
           }
         }
       }
       if (filled.context) saveContext(filled.context);
       const done = plan && plan.steps && plan.steps.every((item) => item.status === "ok");
+      const shot = filled.cmd ? lib.oneShot(filled.cmd) : "";
       return res.json({
         say: filled.say || "",
-        emit: { cmd: filled.cmd || null, ask: filled.ask || null },
+        emit: { cmd: shot || null, ask: filled.ask || (filled.cmd && !shot ? "That command does not exit." : null) },
         plan: plan || null,
         context: filled.context || context,
         done: !!done,
@@ -747,11 +768,16 @@ app.post("/api/replan", async (req, res) => {
       const parsed = lib.parsePlan(raw, plan.goal);
       const kept = startOver ? [] : (plan.steps || []).filter((s) => s.status === "ok");
       const ids = new Set(kept.map((s) => s.id));
-      const added = parsed.steps.filter((s) => !ids.has(s.id));
+      const failed = (plan.steps || []).find((s) => s.status === "fail");
+      const failedCmd = lib.oneShot((failed && failed.cmd) || "");
+      const added = parsed.steps.filter((s) => !ids.has(s.id)).map((s) => {
+        const cmd = s.cmd ? lib.oneShot(s.cmd) : "";
+        return { ...s, cmd: cmd && cmd !== failedCmd ? cmd : "" };
+      });
       const next = { goal: plan.goal, steps: kept.concat(added), cursor: kept.length };
       return res.json({ display: String(lib.extractJson(raw).display || "Revised remaining steps."), plan: next });
     } catch (_) {
-      const rest = (plan.steps || []).filter((s) => s.status !== "ok").map((s) => ({ ...s, status: "todo" }));
+      const rest = (plan.steps || []).filter((s) => s.status !== "ok").map((s) => ({ ...s, status: "todo", cmd: s.cmd ? lib.oneShot(s.cmd) : "" }));
       return res.json({ display: "Retry remaining steps.", plan: { ...plan, steps: rest, cursor: 0 } });
     }
   } catch (err) {
@@ -822,6 +848,12 @@ app.post("/api/check", async (req, res) => {
       check.context = lib.stepState(stamped, step, stateResult, check.ok, context);
     }
     let nextPlan = lib.mark(stamped, step.id, check.ok ? "ok" : check.ask ? "ask" : "fail");
+    if (!check.ok && result && result.killed) {
+      nextPlan = {
+        ...nextPlan,
+        steps: (nextPlan.steps || []).map((s) => (s.id === step.id ? { ...s, cmd: "" } : s)),
+      };
+    }
     if (check.startOver) {
       ledger = lib.rollbackAfter(ledger, null);
       lastGoodStep = null;
