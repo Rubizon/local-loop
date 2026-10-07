@@ -226,13 +226,26 @@ function brief(user, board) {
   return lines.join("\n");
 }
 
+function plainThink(text) {
+  let s = String(text || "");
+  s = s.replace(/```[\s\S]*?```/g, " ");
+  s = s.replace(/[*_#>`]+/g, " ");
+  s = s.replace(/\b(determine the next step|next step|reasoning|thought)\s*:\s*/gi, " ");
+  s = s.replace(/\s+/g, " ").trim();
+  s = s.replace(/\s*\([^)]*$/, "").trim();
+  s = s.replace(/[,:;]+$/, "").trim();
+  if (!s || /^[{}]+$/.test(s)) return "";
+  if (!/[.!?]$/.test(s)) s += ".";
+  if (s.length <= 140) return s;
+  const cut = s.slice(0, 140);
+  const space = cut.lastIndexOf(" ");
+  return (space > 40 ? cut.slice(0, space) : cut).replace(/[,:;]+$/, "") + ".";
+}
+
 function thinkNote(raw) {
   const note = field(raw, "note");
-  if (note && !/^one sentence\.?$/i.test(note)) return clip(note, 160);
-  const text = stripThink(raw).replace(/\s+/g, " ").trim();
-  if (!text || text === "{}" || text.startsWith("{")) return "";
-  const parts = text.split(/(?<=[.!?])\s+/).filter(Boolean);
-  return clip(parts[parts.length - 1] || text, 160);
+  if (note && /^one sentence\.?$/i.test(note)) return "";
+  return plainThink(note || stripThink(raw));
 }
 
 function beatReason(method, steps) {
@@ -390,6 +403,7 @@ async function selfCheckBeats() {
     (board) => seen.push(board)
   );
   const checks = [
+    ["a thinking outline becomes one sentence", thinkNote("**Determine the Next Step:** * I need to generate the list of weekdays (Monday,") === "I need to generate the list of weekdays."],
     ["think is shown before the goal", /THINK: Produce the list/.test(seen[0] || "") && seen.some((board) => /GOAL: foo\.txt contains the weekdays/.test(board))],
     ["method shown before the command", seen.some((board) => /METHOD: plan/.test(board) && !/cmd:/.test(board))],
     ["slot is the weekday list", seen.some((board) => /SLOT days: Monday/.test(board))],

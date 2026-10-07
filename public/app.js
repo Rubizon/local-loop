@@ -481,9 +481,18 @@ function showDoubt(box, warning) {
   note("unsure", (warning.sign || "") + " " + (warning.why || ""));
 }
 
+function cleanReason(text) {
+  let s = String(text || "");
+  s = s.replace(/[*_#>`]+/g, " ");
+  s = s.replace(/\b(determine the next step|next step)\s*:\s*/gi, " ");
+  s = s.replace(/\s*\([^)]*$/, "");
+  s = s.replace(/\s+/g, " ").replace(/[,:;]+$/, "").trim();
+  return s;
+}
+
 function showReason(box, text) {
   if (!box || box.querySelector(".reason")) return;
-  const raw = String(text || "").trim();
+  const raw = cleanReason(text);
   const el = document.createElement("div");
   el.className = "reason";
   const k = document.createElement("button");
@@ -573,7 +582,7 @@ function renderContext(text) {
     else if (/^SLOT\b/i.test(line)) span.className += " slot";
     else if (/^KEEP\b/i.test(line)) span.className += " keep";
     else if (/^FACT:/i.test(line)) span.className += " fact";
-    else if (/^NOTE:/i.test(line)) span.className += " note-line";
+    else if (/^THINK:/i.test(line)) span.className += " think";
     span.textContent = line + "\n";
     ctxEl.appendChild(span);
   });
