@@ -405,6 +405,7 @@ async function selfCheckBeats() {
     (board) => seen.push(board)
   );
   const checks = [
+    ["a thinking outline becomes one sentence", thinkNote("**Determine the Next Step:** * I need to generate the list of weekdays (Monday,") === "I need to generate the list of weekdays."],
     ["a copied instruction is not a thought", thinkNote('yze the Request: User Question: "Is the GPU hotter?" Constraint: "Think, then one JSON object. The first character.') === ""],
     ["think is shown before the goal", /THINK: Produce the list/.test(seen[0] || "") && seen.some((board) => /GOAL: foo\.txt contains the weekdays/.test(board))],
     ["method shown before the command", seen.some((board) => /METHOD: plan/.test(board) && !/cmd:/.test(board))],
