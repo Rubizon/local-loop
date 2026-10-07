@@ -25,7 +25,7 @@ A whole tree is a scan, not one prompt full of source. Ask it to read a director
 
 ## How a turn works
 
-The model does not see the chat. It sees one small frame at a time. Thinking is turned off. Each call is capped (`goal` 48 tokens, `method` 24, `say` 160, `ask` 64, `cmd` 220, `plan` 240). The context window defaults to 4096 (`OLLAMA_NUM_CTX`).
+The model does not see the chat. It sees one small frame at a time. Thinking is turned off. Each call is capped (`goal` 48 tokens, `method` 24, `say` 160, `ask` 64, `cmd` 220, `plan` 240). The context window is whatever Ollama has given that model. The server reads it from the running model, or from `num_ctx` in the Modelfile. It does not set one of its own.
 
 1. You send a message. The state panel updates as soon as each beat finishes. You do not have to approve those updates. A fully specified command, such as listing a directory or writing text you already gave, skips the model and still shows the goal and the method.
 2. **Goal.** One line: the outcome, not the steps. A follow-up keeps the old goal. A new job replaces it.
@@ -71,7 +71,7 @@ PORT=4000 bash run.sh qwen3:4b-instruct
 - **Test model** runs the built-in checks and downloads a report. It tells you if this model can keep the JSON the loop needs. It does not prove the model can do your task.
 - **Export** downloads the chat, the steps, and State as text, so a failure can be pasted somewhere else and read.
 - **Clear** starts over.
-- The meter under the box is a rough token count of State plus what you are typing, against the context window (4096 unless `OLLAMA_NUM_CTX` is set).
+- The meter under the box is a rough token count of State plus what you are typing, against the context window Ollama reports for this model.
 
 ## Checks
 

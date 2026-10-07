@@ -611,7 +611,14 @@ function noteUid(uid) {
 function watchServer() {
   fetch("/api/uid", { cache: "no-store" })
     .then(function (r) { return r.ok ? r.json() : null; })
-    .then(function (d) { if (d) noteUid(d.uid); })
+    .then(function (d) {
+      if (!d) return;
+      noteUid(d.uid);
+      if (d.numCtx && d.numCtx !== numCtx) {
+        numCtx = d.numCtx;
+        updateBudget();
+      }
+    })
     .catch(function () {});
 }
 setInterval(watchServer, 3000);

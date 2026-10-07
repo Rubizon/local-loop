@@ -37,7 +37,7 @@ async function chat(system, user, predict) {
     body: JSON.stringify({
       model: OLLAMA_MODEL,
       stream: false,
-      options: { temperature: 0.1, num_ctx: 8192, num_predict: predict || 200 },
+      options: { temperature: 0.1, num_predict: predict || 200 },
       messages: [
         { role: "system", content: system },
         { role: "user", content: user },

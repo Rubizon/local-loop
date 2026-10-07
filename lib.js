@@ -4,7 +4,56 @@ const { spawn } = require("child_process");
 
 const CONTEXT_MAX_CHARS = 1600;
 const CONTEXT_MAX_LINES = 12;
-const NUM_CTX = Number(process.env.OLLAMA_NUM_CTX || 4096);
+let numCtx = 4096;
+
+function getNumCtx() {
+  return numCtx;
+}
+
+function setNumCtx(n) {
+  const value = Math.floor(Number(n));
+  if (value >= 256) numCtx = value;
+  return numCtx;
+}
+
+function sameModel(left, right) {
+  const a = String(left || "").trim();
+  const b = String(right || "").trim();
+  if (!a || !b) return false;
+  const full = (s) => (s.includes(":") ? s : s + ":latest");
+  return a === b || full(a) === full(b);
+}
+
+function contextFromShow(info) {
+  const modelInfo = (info && info.model_info) || {};
+  let max = 0;
+  Object.keys(modelInfo).forEach((key) => {
+    if (/(^|\.)context_length$/.test(key)) {
+      const n = Number(modelInfo[key]);
+      if (n > max) max = n;
+    }
+  });
+  const text = String((info && info.parameters) || "") + "\n" + String((info && info.modelfile) || "");
+  const pinned = text.match(/(?:^|\n)\s*(?:PARAMETER\s+)?num_ctx\s+(\d+)/i);
+  return { max: max, pinned: pinned ? Number(pinned[1]) : 0 };
+}
+
+function contextFromPs(body, model) {
+  const models = (body && body.models) || [];
+  for (let i = 0; i < models.length; i++) {
+    const item = models[i] || {};
+    if (sameModel(item.model || item.name, model)) return Number(item.context_length) || 0;
+  }
+  return 0;
+}
+
+function pickContext(showInfo, psBody, model) {
+  const running = contextFromPs(psBody, model);
+  if (running) return { tokens: running, source: "running" };
+  const shown = contextFromShow(showInfo);
+  if (shown.pinned) return { tokens: shown.pinned, source: "modelfile" };
+  return { tokens: 0, source: "", max: shown.max };
+}
 const DENY_CMD = /(\bsudo\b|\brm\s+-rf\s+\/|\bmkfs\b|\bdd\s+if=|\bchmod\s+-R\s+777|\bchown\s+-R\s+|\bcurl\b[^|&;]*\|\s*(sh|bash)|:\(\)\s*\{)/i;
 
 const SYSTEM_A = `Output one JSON object and nothing else. The first character is {.
@@ -106,7 +155,7 @@ function readPathFromCmd(cmd) {
 }
 
 function contextCharBudget() {
-  return Math.max(2000, ((Number(NUM_CTX) || 8192) - 1000) * 3);
+  return Math.max(2000, ((Number(getNumCtx()) || 4096) - 1000) * 3);
 }
 
 function progressState(goal, index, total, notes) {
@@ -370,7 +419,7 @@ function summarizeOutput(cmd, stdout) {
 }
 
 function overflow(context, output) {
-  return Math.ceil((400 + String(context || "").length + String(output || "").length) / 4) > NUM_CTX * 0.7;
+  return Math.ceil((400 + String(context || "").length + String(output || "").length) / 4) > getNumCtx() * 0.7;
 }
 
 function applyAttach(how, cmd, result) {
@@ -1547,7 +1596,8 @@ function rollbackAfter(ledger, keepStepId) {
 function estimatePrompt(context, user, extra) {
   const chars = SYSTEM_A.length + String(context || "").length + String(user || "").length + String(extra || "").length + 160;
   const tokens = Math.ceil(chars / 4);
-  return { chars, tokens, numCtx: NUM_CTX, pct: Math.round((tokens / NUM_CTX) * 100) };
+  const ctx = getNumCtx();
+  return { chars, tokens, numCtx: ctx, pct: Math.round((tokens / ctx) * 100) };
 }
 
 function scoreModelReply(parsed, rawText) {
@@ -2189,6 +2239,9 @@ function runUnitTests() {
   check("summarize ls", /aider/.test(summarizeOutput("ls -la /tmp", "total 1\ndrwx aider")));
   const many = Array.from({ length: 20 }, (_, i) => "f" + i).join("\n");
   check("summarize ls caps", /\+8/.test(summarizeOutput("ls /tmp", many)) && summarizeOutput("ls /tmp", many).length < 200);
+  check("running context is the one ollama allocated", pickContext({ model_info: { "qwen3.context_length": 32768 }, parameters: "num_ctx 8192" }, { models: [{ name: "qwen3:4b", context_length: 4096 }] }, "qwen3:4b").tokens === 4096);
+  check("modelfile context is used when the model is not loaded", pickContext({ parameters: "num_ctx 8192", model_info: { "qwen3.context_length": 32768 } }, { models: [] }, "qwen3:4b").tokens === 8192);
+  check("an unloaded model does not claim its theoretical max", pickContext({ model_info: { "qwen35.context_length": 262144 } }, { models: [] }, "qwen3.5:4b").tokens === 0);
   check("a quiet write is not too large", reportSay("Wrote /tmp/loop/foo.txt.", "", true, false, "") === "Wrote /tmp/loop/foo.txt.");
   check("only a huge output says the summary failed", reportSay("That’s done.", "", true, true, "") === "The output was too large to report in one pass, and the summary failed.");
   check("a write is not a failed listing", judge({ do: "I will generate a list of workdays and save it to the file foo.txt.", expect: "the command output" }, { cmd: "date -d 'next monday' > foo.txt", code: 0, stdout: "", stderr: "" }).ok === true);
@@ -2403,7 +2456,11 @@ function runUnitTests() {
 }
 
 module.exports = {
-  NUM_CTX,
+  getNumCtx,
+  setNumCtx,
+  pickContext,
+  contextFromShow,
+  contextFromPs,
   DENY_CMD,
   SYSTEM_A,
   SYSTEM_REWRITE,

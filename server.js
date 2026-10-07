@@ -12,7 +12,6 @@ const OLLAMA_HOST = (process.env.OLLAMA_HOST || "http://127.0.0.1:11434").replac
 const OLLAMA_MODEL = process.env.OLLAMA_MODEL || "qwen2.5-coder:3b-8k";
 const WORKSPACE = path.resolve(process.env.WORKSPACE || process.cwd());
 const CONTEXT_FILE = path.resolve(process.env.CONTEXT_FILE || path.join(__dirname, "data", "context.txt"));
-const NUM_CTX = lib.NUM_CTX;
 
 function freshCwd() {
   const dir = path.join("/tmp", "loop-" + Date.now().toString(36) + "-" + crypto.randomBytes(3).toString("hex"));
@@ -156,12 +155,72 @@ async function ollamaText(system, user, numPredict = 280) {
   return run;
 }
 
+async function readOllama(pathname, body) {
+  const res = await fetch(OLLAMA_HOST + pathname, {
+    method: body ? "POST" : "GET",
+    headers: body ? { "Content-Type": "application/json" } : undefined,
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const text = await res.text();
+  if (!res.ok) throw new Error(text.slice(0, 240));
+  return JSON.parse(text);
+}
+
+let contextTask = null;
+
+async function ensureContext() {
+  if (!contextTask) {
+    contextTask = detectContext().catch((err) => {
+      contextTask = null;
+      console.log("context unknown: " + String(err.message || err));
+      return lib.getNumCtx();
+    });
+  }
+  return contextTask;
+}
+
+async function detectContext() {
+  let show = {};
+  let ps = {};
+  try { ps = await readOllama("/api/ps"); } catch (_) {}
+  let picked = lib.pickContext(show, ps, OLLAMA_MODEL);
+  if (!picked.tokens) {
+    try { show = await readOllama("/api/show", { model: OLLAMA_MODEL }); } catch (_) {}
+    picked = lib.pickContext(show, ps, OLLAMA_MODEL);
+  }
+  if (!picked.tokens) {
+    console.log("Loading " + OLLAMA_MODEL + " to read its context...");
+    const res = await fetch(OLLAMA_HOST + "/api/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: OLLAMA_MODEL,
+        stream: false,
+        think: false,
+        options: { temperature: 0, num_predict: 1 },
+        messages: [{ role: "user", content: "ok" }],
+      }),
+    });
+    await res.text();
+    try { ps = await readOllama("/api/ps"); } catch (_) {}
+    picked = lib.pickContext(show, ps, OLLAMA_MODEL);
+  }
+  if (!picked.tokens) {
+    console.log("context not reported by ollama");
+    return lib.getNumCtx();
+  }
+  lib.setNumCtx(picked.tokens);
+  console.log("context " + picked.tokens + " (" + picked.source + ")");
+  return picked.tokens;
+}
+
 async function ollamaOnce(system, user, numPredict = 280) {
+  await ensureContext();
   const payload = {
     model: OLLAMA_MODEL,
     stream: false,
     think: false,
-    options: { temperature: 0.7, top_p: 0.8, top_k: 20, num_ctx: NUM_CTX, num_predict: numPredict },
+    options: { temperature: 0.7, top_p: 0.8, top_k: 20, num_predict: numPredict },
     messages: [
       { role: "system", content: system },
       { role: "user", content: user },
@@ -205,7 +264,7 @@ app.post("/api/drop", (req, res) => {
 
 app.get("/api/uid", (_req, res) => {
   res.setHeader("Cache-Control", "no-store");
-  res.json({ uid: SERVER_UID });
+  res.json({ uid: SERVER_UID, numCtx: lib.getNumCtx() });
 });
 
 app.get("/api/state", (_req, res) => {
@@ -214,7 +273,7 @@ app.get("/api/state", (_req, res) => {
     model: OLLAMA_MODEL,
     workspace: WORKSPACE,
     cwd: sessionCwd,
-    numCtx: NUM_CTX,
+    numCtx: lib.getNumCtx(),
     context: loadContext(),
   });
 });
@@ -814,6 +873,7 @@ if (require.main === module) {
     console.log(`local-loop http://127.0.0.1:${PORT}`);
     console.log(`model ${OLLAMA_MODEL}`);
     console.log(`cwd ${sessionCwd}`);
+    ensureContext().catch(() => {});
   });
 }
 
