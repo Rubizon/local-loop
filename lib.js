@@ -516,7 +516,7 @@ function contentWrite(text, context) {
   if (!/\b(write|put|append|add|save)\b/i.test(t)) return null;
   if (/(\d+)\s*(?:->|to|through|…|\.{2,}|-)\s*(\d+)/i.test(t) && !/["'][^"']+["']/.test(t)) return null;
   const quoted = (t.match(/["']([^"']+)["']/) || [])[1] || "";
-  if (!quoted && (knownList(t) || /\b(list|summar|report|every|each|all)\b/i.test(t))) return null;
+  if (!quoted && /\b(list|summar|report|every|each|all)\b/i.test(t)) return null;
   const files = [];
   const re = /\b([A-Za-z0-9_-]+\.[A-Za-z][A-Za-z0-9]{0,7})\b/g;
   let match;
@@ -544,12 +544,6 @@ function namedFile(text) {
   return safeFileName(named && named[1]);
 }
 
-function knownList(text) {
-  if (/\b(weekdays?|days of the week)\b/i.test(text)) return ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
-  if (/\b(months of the year|all the months|every month)\b/i.test(text)) return ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
-  return null;
-}
-
 function fileWritePlan(text, context) {
   const t = String(text || "");
   const filling = contentWrite(t, context);
@@ -562,20 +556,9 @@ function fileWritePlan(text, context) {
       ],
     };
   }
-  const named = namedFile(t);
-  const file = named;
-  const names = knownList(t);
-  if (names && file && /\b(write|put|save|file|into)\b/i.test(t)) {
-    return {
-      goal: "KEEP GOAL: " + clip(t, 140),
-      cursor: 0,
-      steps: [
-        { id: "1", do: "Write " + names.length + " names into " + file, need: "", expect: file + " contains the names", attach: "paths", cmd: writeCmd(file, names.join("\\n"), false), status: "todo" },
-      ],
-    };
-  }
+  const file = namedFile(t);
   if (!file || !/\b(write|create|save|put)\b/i.test(t)) return null;
-  if (/\b(list|summar|report|weekday|weekdays|month|months|every|each)\b/i.test(t)) return null;
+  if (/\b(list|summar|report|every|each|all)\b/i.test(t)) return null;
   const range = t.match(/(\d+)\s*(?:->|to|through|…|\.{2,}|-)\s*(\d+)/i);
   let cmd;
   let goal;
@@ -2287,10 +2270,10 @@ function runUnitTests() {
   const kept = finalizeRewrite("KEEP GOAL: inspect /tmp", "FACT: aider", "add");
   check("keep goal", /KEEP GOAL/.test(kept) && /aider/.test(kept));
   check("braces inside a string stay in the JSON", extractJson('{"display":"int main() { return 0; }","cmd":null}').display === "int main() { return 0; }");
-  check("weekdays are written as names", (() => {
+  check("a generated list is not stored as the sentence", (() => {
     const turn = localTurn("List all weekdays and put the list in a file foo.txt", "");
     const cmd = (turn.plan && turn.plan.steps[0] && turn.plan.steps[0].cmd) || "";
-    return /Monday/.test(cmd) && /Sunday/.test(cmd) && /foo\.txt/.test(cmd) && !/List all weekdays/.test(cmd) && /weekdays/.test(turn.plan.goal);
+    return turn.needsModel === true && !/Monday/.test(cmd) && !/List all weekdays/.test(cmd);
   })());
   check("a braced sentence is a note", scoreWorkflow("note", repairReply("note", "{This function simply returns a constant value of 1, indicating a successful local turn.}", "")).ok === true);
   const brokenC = '{"reason":"They asked to see the program.","display":"#include <stdio.h>\\\\n\\\\nint main() {\\\\n printf(\\\\"hello\\\\");\\\\n return 0;\\\\n}\\\\nEOF\\\\"\\n}","cmd":null}';

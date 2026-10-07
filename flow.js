@@ -16,7 +16,8 @@ cmd: one shell command can do it.
 plan: it needs more than one of those.`,
   say: `One JSON object. The first character is {.
 {"text":"the answer"}
-Use only GOAL and IN. No shell command. No state lines.`,
+Use only GOAL and IN. No shell command. No state lines.
+text is the content they asked for. Do not repeat their request.`,
   ask: `One JSON object. The first character is {.
 {"ask":"one question"}
 Ask only for the missing fact.`,
@@ -180,6 +181,29 @@ function applyCmdSlot(stateText, step, result) {
   return writeBoard(board);
 }
 
+function composeThenStore(text) {
+  const t = String(text || "");
+  if (!/\b[A-Za-z0-9_-]+\.[A-Za-z0-9]+\b/.test(t)) return false;
+  if (!/\b(write|put|save|into|file)\b/i.test(t)) return false;
+  if (!/\b(list|summar|report|every|each|all)\b/i.test(t)) return false;
+  if (/["'][^"']+["']/.test(t)) return false;
+  if (/(\d+)\s*(?:->|to|through|…|\.{2,}|-)\s*(\d+)/.test(t)) return false;
+  return true;
+}
+
+function storeCmd(file, text) {
+  const body = String(text || "").replace(/\\/g, "\\\\").replace(/'/g, "\\'").replace(/\r?\n/g, "\\n");
+  return "python3 -c \"open('" + file + "','w').write('" + body + "\\n')\"";
+}
+
+function echoed(user, value) {
+  const flat = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  const left = flat(user);
+  const right = flat(value);
+  if (!right || right.length < 8) return false;
+  return left.indexOf(right) !== -1 || right.indexOf(left.slice(0, 40)) !== -1;
+}
+
 function beatReason(method, steps) {
   if (method === "ask") return "A fact is missing, so this waits for you.";
   if (method === "cmd") return "One command. Nothing runs until you approve.";
@@ -208,7 +232,8 @@ async function runBeats(text, stateText, callModel, onState) {
   let board = { goal: goal, method: "", cursor: "", ask: "", slots: slots };
   show(writeBoard(board));
   const methodRaw = await call(callModel, "method", "GOAL: " + goal);
-  const method = normMethod(field(methodRaw, "method")) || "say";
+  let method = normMethod(field(methodRaw, "method")) || "say";
+  if (composeThenStore(text)) method = "plan";
   board.method = method;
   show(writeBoard(board));
   if (method === "say") {
@@ -239,7 +264,7 @@ async function runBeats(text, stateText, callModel, onState) {
   }
   const planRaw = await call(callModel, "plan", "GOAL: " + goal + "\nUser:\n" + clip(text, 400));
   let steps = parsePlanSteps(planRaw);
-  if (!steps.length) steps = fallbackPlan(text);
+  if (!steps.length || (composeThenStore(text) && (!steps[0] || steps[0].method !== "say"))) steps = fallbackPlan(text);
   const said = [];
   let cursor = 0;
   while (steps[cursor] && steps[cursor].method === "say" && cursor < 3) {
@@ -255,8 +280,14 @@ async function runBeats(text, stateText, callModel, onState) {
     show(writeBoard(board));
   }
   if (steps[cursor] && steps[cursor].method === "cmd") {
-    const raw = await call(callModel, "cmd", frameFor(steps[cursor], board));
-    steps[cursor] = { ...steps[cursor], cmd: field(raw, "cmd") };
+    if (composeThenStore(text)) {
+      const file = (String(text).match(/\b([A-Za-z0-9_-]+\.[A-Za-z0-9]+)\b/) || [])[1];
+      const payload = said.filter((line) => !echoed(text, line)).join("\n");
+      steps[cursor] = { ...steps[cursor], cmd: payload && file ? storeCmd(file, payload) : "" };
+    } else {
+      const raw = await call(callModel, "cmd", frameFor(steps[cursor], board));
+      steps[cursor] = { ...steps[cursor], cmd: field(raw, "cmd") };
+    }
     board.cursor = steps[cursor].id;
     show(writeBoard(board));
   }
@@ -269,6 +300,18 @@ async function runBeats(text, stateText, callModel, onState) {
     board.ask = steps[cursor].do;
     show(writeBoard(board));
     return { mode: "A", why: "ask", reason: beatReason("ask"), display: steps[cursor].do, cmd: null, plan: plan, context: writeBoard(board) };
+  }
+  if (composeThenStore(text) && steps[cursor].method === "cmd" && !steps[cursor].cmd) {
+    return {
+      mode: "A",
+      why: "ask",
+      reason: "The reply repeated the request instead of the content.",
+      display: "I am unsure what I am doing here.",
+      cmd: null,
+      plan: null,
+      warning: { sign: "I am unsure what I am doing here.", why: "The reply repeated the request instead of the content." },
+      context: writeBoard(board),
+    };
   }
   return {
     mode: "B",
@@ -316,6 +359,7 @@ async function selfCheckBeats() {
     ["slot is the weekday list", seen.some((board) => /SLOT days: Monday/.test(board))],
     ["say text is shown", /Monday, Tuesday/.test(out.display || "")],
     ["write stays a command", !!(out.plan && /foo\.txt/.test(out.plan.steps[1].cmd || "") && out.cmd)],
+    ["stored text is the answer, not a canned command", /Monday, Tuesday/.test(out.cmd || "") && !/printf/.test(out.cmd || "")],
     ["answer keeps the goal", parseBoard(writeBoard({ goal: "keep", method: "ask", ask: "Name?", slots: {} })).goal === "keep"],
   ];
   const failed = checks.filter((row) => !row[1]);
